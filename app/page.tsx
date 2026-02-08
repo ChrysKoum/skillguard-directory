@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase";
-import { RiskBadge } from "@/components/ui/RiskBadge";
+import { DirectoryGrid } from "@/components/DirectoryGrid";
 import Link from "next/link";
-import { Search, ShieldAlert, CheckCircle2 } from "lucide-react";
+import { Search } from "lucide-react";
 
 export const revalidate = 0; // Always fresh
 
@@ -14,13 +14,14 @@ async function getRecentScans() {
       created_at,
       status,
       skills (
+        id,
         name,
         slug
       )
     `)
     .eq("status", "done")
     .order("created_at", { ascending: false })
-    .limit(12);
+    .limit(50); // Increased limit for directory feel
 
   return data || [];
 }
@@ -63,42 +64,12 @@ export default async function Home() {
       </section>
 
       {/* Directory Section */}
-      <section className="flex-1 py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+      <section id="directory" className="flex-1 py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
         <div className="flex items-center justify-between mb-8">
-          <h2 className="text-2xl font-semibold text-white">Recent Audits</h2>
-          <Link href="/" className="text-sm text-indigo-400 hover:text-indigo-300">View all</Link>
+          <h2 className="text-2xl font-semibold text-white">Agent Directory</h2>
         </div>
 
-        {recentScans.length === 0 ? (
-          <div className="text-center py-20 border border-dashed border-slate-800 rounded-xl bg-slate-900/50">
-            <ShieldAlert className="w-12 h-12 text-slate-600 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-slate-300">No Audits Yet</h3>
-            <p className="text-slate-500">Be the first to scan an agent!</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {recentScans.map((scan: any) => (
-              <Link key={scan.id} href={`/skill/${scan.skills.id}`} className="group block">
-                <div className="h-full bg-slate-900/50 border border-slate-800 rounded-xl p-5 hover:border-indigo-500/50 hover:bg-slate-900 transition-all">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h3 className="font-semibold text-white group-hover:text-indigo-400 transition-colors">
-                        {scan.skills.name}
-                      </h3>
-                      <p className="text-xs text-slate-500 mt-1 truncate max-w-[200px]">{scan.skills.slug}</p>
-                    </div>
-                    <RiskBadge level={scan.risk_level} />
-                  </div>
-
-                  <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-800/50 text-xs text-slate-400">
-                    <CheckCircle2 className="w-3 h-3 text-slate-600" />
-                    <span>Scanned {new Date(scan.created_at).toLocaleDateString()}</span>
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        )}
+        <DirectoryGrid scans={recentScans as any} />
       </section>
     </div>
   );

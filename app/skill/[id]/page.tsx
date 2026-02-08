@@ -1,6 +1,8 @@
 import { supabase } from "@/lib/supabase";
 import { RiskBadge } from "@/components/ui/RiskBadge";
+import { CertifiedBadge } from "@/components/ui/CertifiedBadge";
 import { CapabilityChip } from "@/components/ui/CapabilityChip";
+import { RescanButton } from "@/components/RescanButton";
 import { Shield, Download, AlertTriangle, CheckCircle, FileCode, Activity } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -8,10 +10,6 @@ import { notFound } from "next/navigation";
 export const revalidate = 0;
 
 async function getSkillData(id: string) {
-    // Use absolute URL for server-side fetch during build/runtime
-    // In Vercel, use process.env.VERCEL_URL if needed, or just DB direct for Server Components
-    // Using DB direct is better for Server Component.
-
     const { data: skill } = await (supabase.from("skills") as any).select("*").eq("id", id).single();
     if (!skill) return null;
 
@@ -64,13 +62,36 @@ export default async function SkillReport({ params }: { params: Promise<{ id: st
                 <div>
                     <div className="flex items-center gap-3 mb-2">
                         <h1 className="text-3xl font-bold text-white">{skill.name}</h1>
-                        <RiskBadge level={scan.risk_level} className="text-sm px-3 py-1" />
+                        {scan.risk_level === 'low' ? <CertifiedBadge /> : <RiskBadge level={scan.risk_level} className="text-sm px-3 py-1" />}
                     </div>
-                    <a href={skill.source_url} target="_blank" className="text-slate-400 hover:text-indigo-400 font-mono text-sm">
-                        {skill.source_url}
-                    </a>
+                    <div className="flex items-center gap-4">
+                        <a href={skill.source_url} target="_blank" className="text-slate-400 hover:text-indigo-400 font-mono text-sm">
+                            {skill.source_url}
+                        </a>
+                        <RescanButton url={skill.source_url} />
+                    </div>
                 </div>
-                <div className="flex gap-3">
+                <div className="flex gap-3 items-center">
+                    {/* Token Usage Badge */}
+                    {deepRes?.token_usage && (
+                        <div className="flex flex-col items-end justify-center mr-4 text-xs text-slate-500 font-mono">
+                            <span>{deepRes.token_usage.total.toLocaleString()} tokens</span>
+                            <span className="text-[10px] opacity-60 uppercase">{scan.deep_model_used || "Gemini 3 Pro"}</span>
+                        </div>
+                    )}
+
+                    {scan.warnings && scan.warnings.length > 0 && (
+                        <div className="group relative flex items-center justify-center mr-2">
+                            <AlertTriangle className="w-5 h-5 text-yellow-500 cursor-help" />
+                            <div className="absolute top-8 right-0 w-64 p-3 bg-slate-900 border border-yellow-500/30 rounded-lg text-xs text-slate-300 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                                <p className="font-bold text-yellow-500 mb-1">Scan Warnings:</p>
+                                <ul className="list-disc pl-3 space-y-1">
+                                    {(scan.warnings as string[]).map((w, i) => <li key={i}>{w}</li>)}
+                                </ul>
+                            </div>
+                        </div>
+                    )}
+
                     {artifacts.map((art) => (
                         <a
                             key={art.id}
@@ -90,15 +111,15 @@ export default async function SkillReport({ params }: { params: Promise<{ id: st
                 <div className="space-y-6">
                     {/* Score Card */}
                     <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6">
-                        <h3 className="text-sm font-medium text-slate-500 uppercase tracking-wider mb-4">Risk Score</h3>
+                        <h3 className="text-sm font-medium text-slate-500 uppercase tracking-wider mb-4">Safety Score</h3>
                         <div className="flex items-end gap-2">
-                            <span className="text-5xl font-bold text-white">{staticRes?.static_score}</span>
+                            <span className="text-5xl font-bold text-white">{100 - (staticRes?.static_score || 0)}</span>
                             <span className="text-slate-500 mb-1">/ 100</span>
                         </div>
                         <div className="w-full bg-slate-800 h-2 rounded-full mt-4 overflow-hidden">
                             <div
-                                className="h-full bg-gradient-to-r from-green-500 to-red-500"
-                                style={{ width: `${staticRes?.static_score}%` }}
+                                className="h-full bg-gradient-to-r from-red-500 to-green-500"
+                                style={{ width: `${100 - (staticRes?.static_score || 0)}%` }}
                             />
                         </div>
                     </div>
@@ -157,8 +178,14 @@ export default async function SkillReport({ params }: { params: Promise<{ id: st
                                     </div>
 
                                     {finding.evidence.length > 0 && (
-                                        <div className="mt-4 bg-slate-950 rounded border border-slate-800 p-3 font-mono text-xs text-slate-300 overflow-x-auto">
-                                            {finding.evidence[0].snippet}
+                                        <div className="mt-4">
+                                            <div className="flex items-center gap-2 text-xs text-indigo-400 mb-1 font-mono">
+                                                <FileCode className="w-3 h-3" />
+                                                <span>{finding.evidence[0].source}</span>
+                                            </div>
+                                            <div className="bg-slate-950 rounded border border-slate-800 p-3 font-mono text-xs text-slate-300 overflow-x-auto">
+                                                {finding.evidence[0].snippet}
+                                            </div>
                                         </div>
                                     )}
                                 </div>

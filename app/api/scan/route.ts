@@ -5,6 +5,7 @@ import { fetchRepoZip } from "@/lib/github";
 import { performStaticScan } from "@/lib/staticScanner";
 import { performDeepAudit } from "@/lib/geminiAudit";
 import { generateAndStoreArtifacts } from "@/lib/artifacts";
+import { buildSmartScanPack } from "@/lib/scanPack";
 
 // Set max duration for Vercel (if Pro)
 export const maxDuration = 60;
@@ -86,21 +87,18 @@ export async function POST(req: NextRequest) {
         if (scanError) throw scanError;
         const scanId = scan.id;
 
-        // 5. Run Pipelines (Await for now - simpler for MVP)
-        // In a real production app, we'd fire this to a queue. 
-        // Here we run it inline and hope we beat the timeout.
+        // 5. Run Pipelines (Background Mode)
+        // We do NOT await this. We return immediately so the UI can poll.
+        // This solves the HTTP Timeout issue.
+        const pipelinePromise = runAnalysisPipeline(scanId, normalizedUrl);
 
-        // Return "running" state immediately so UI can poll
-        // Note: If Vercel kills the lambda after response, this might fail. 
-        // BUT for "Vibe Engineering" demos we often run locally or on generous timeouts.
-        // Ideally we await it if comfortable with latency, but let's return early to enable "Loading UI".
-        // WARNING: On Vercel Serverless, returning terminates execution unless using `waitUntil`.
-        // Since we don't have waitUntil easily in Next.js App Router (it's internal), 
-        // we MUST await unless we accept it might die.
-        // DECISION: For Hackathon reliability, we AWAIT it. 
-        // The user will see a spinner for 20-30s. Better than a silent failure.
-
-        await runAnalysisPipeline(scanId, normalizedUrl);
+        // In Next.js/Vercel, we should use waitUntil if available to keep lambda alive
+        // For local dev, just floating the promise is fine.
+        // @ts-ignore
+        if (typeof context !== 'undefined' && context.waitUntil) {
+            // @ts-ignore
+            context.waitUntil(pipelinePromise);
+        }
 
         return NextResponse.json({ skillId, scanId, cached: false });
 
@@ -117,30 +115,87 @@ async function runAnalysisPipeline(scanId: string, url: string) {
     try {
         console.log(`[Pipeline] Starting for ${scanId}...`);
 
+        // Update DB: Ingesting
+        await updateScanStatus(scanId, "ingesting", { static: "pending", deep: "pending" }, "Fetching repository...");
+
         // A. Ingest
         const pack = await fetchRepoZip(url);
+
+        // Update DB: Static Scan
+        await updateScanStatus(scanId, "analysis", { static: "scanning", deep: "pending" }, `Analyzing ${pack.files.length} files...`);
 
         // B. Static
         const staticRes = performStaticScan(pack);
 
-        // C. Deep Audit (1M Context)
-        const deepRes = await performDeepAudit(pack, staticRes);
+        // C. Smart Deep Audit (Token Budgeting)
+        await updateScanStatus(scanId, "analysis", { static: "done", deep: "pending" }, `Processing ${pack.files.length} files to select the most critical for deep audit...`);
+        console.log(`[Pipeline] Building Smart Pack for ${scanId}...`);
+        const smartPack = buildSmartScanPack(pack, staticRes);
+        console.log(`[Pipeline] Smart Pack: ${smartPack.files.length} files (${smartPack.total_tokens} tokens). warnings: ${smartPack.warnings.length}`);
 
-        // D. Artifacts
+        // Update DB: Deep Audit Start
+        const keyFiles = smartPack.files.slice(0, 3).map(f => f.path).join(", ");
+        const remaining = smartPack.files.length - 3;
+        await updateScanStatus(
+            scanId,
+            "analysis",
+            { static: "done", deep: "scanning" },
+            `Deep Audit: Asking Gemini 3 Pro to review ${keyFiles} ${remaining > 0 ? `+ ${remaining} others` : ""} (${(smartPack.total_tokens / 1000).toFixed(1)}k tokens)...`
+        );
+
+        // D. Deep Audit (Gemini 3 Pro -> Flash Fallback) with STREAMING feedback
+        const deepRes = await performDeepAudit(smartPack, staticRes, "gemini-3-pro-preview", async (progress) => {
+            // Update DB with real-time streaming progress
+            await updateScanStatus(
+                scanId,
+                "analysis",
+                { static: "done", deep: "scanning" },
+                progress.message
+            );
+        });
+
+        // Add warnings to deepRes summary if truncated
+        if (smartPack.warnings.length > 0) {
+            deepRes.summary += `\n\n**Note:** ${smartPack.warnings.join(" ")}`;
+        }
+
+        // E. Artifacts
         await generateAndStoreArtifacts(scanId, deepRes);
 
-        // E. Badge Logic
-        let badge: "bronze" | "silver" | "pinned" | "none" = "none";
-        if (deepRes.risk_level === "low" && staticRes.static_score < 50) badge = "silver";
-        else if (deepRes.risk_level === "medium") badge = "bronze";
+        // F. Badge Logic - Calculate tier based on findings
+        const criticalCount = deepRes.findings.filter(f => f.severity === "critical").length;
+        const highCount = deepRes.findings.filter(f => f.severity === "high").length;
+        const findingsCount = deepRes.findings.length;
 
-        // F. Update DB
+        // Calculate badge tier (Paper → Obsidian)
+        let badge: string = "iron";
+        if (criticalCount >= 2) badge = "paper";
+        else if (criticalCount >= 1) badge = "iron";
+        else if (highCount >= 3) badge = "paper";
+        else if (highCount >= 2) badge = "iron";
+        else if (highCount >= 1) badge = "bronze";
+        else if (deepRes.risk_level === "high" || findingsCount >= 5) badge = "iron";
+        else if (deepRes.risk_level === "medium" || findingsCount >= 3) badge = "bronze";
+        else if (findingsCount === 2) badge = "silver";
+        else if (findingsCount === 1) badge = staticRes.static_score < 30 ? "gold" : "silver";
+        else if (findingsCount === 0) {
+            if (staticRes.static_score < 10) badge = "obsidian";
+            else if (staticRes.static_score < 20) badge = "diamond";
+            else if (staticRes.static_score < 40) badge = "platinum";
+            else badge = "gold";
+        }
+
+        // G. Update DB Final
         await (supabaseAdmin.from("scans") as any).update({
-            status: "done",
+            status: deepRes.findings[0]?.title === "Deep Audit Unavailable" ? "done_with_warnings" : "done",
             risk_level: deepRes.risk_level,
             verified_badge: badge,
-            static_json: staticRes as any, // Cast to Json
-            deep_json: deepRes as any
+            static_json: staticRes as any,
+            deep_json: deepRes as any,
+            deep_model_used: (deepRes as any)._model_used || "unknown",
+            stage_status: { static: "done", deep: "done", smart_pack: "built" },
+            warnings: smartPack.warnings,
+            progress_msg: "Analysis Complete."
         }).eq("id", scanId);
 
         console.log(`[Pipeline] Success for ${scanId}`);
@@ -148,10 +203,21 @@ async function runAnalysisPipeline(scanId: string, url: string) {
         console.error(`[Pipeline] Failed for ${scanId}`, err);
         await (supabaseAdmin.from("scans") as any).update({
             status: "error",
-            error_text: err instanceof Error ? err.message : String(err)
+            error_text: err instanceof Error ? err.message : String(err),
+            progress_msg: "Failed."
         }).eq("id", scanId);
-        throw err; // Propagate so the route handler knows it failed if we are awaiting
+        // We don't throw here because we are in background
     }
+}
+
+async function updateScanStatus(id: string, status: string, stage: any, msg: string) {
+    console.log(`[Pipeline] Status update for ${id}: ${msg}`);
+    // Update both stage_status.msg AND progress_msg for compatibility
+    await (supabaseAdmin.from("scans") as any).update({
+        status,
+        stage_status: { ...stage, msg },
+        progress_msg: msg
+    }).eq("id", id);
 }
 
 function parseGitHubInfo(url: string) {

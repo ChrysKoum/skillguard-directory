@@ -16,12 +16,12 @@ export interface StaticScanResult {
 }
 
 const CAPABILITY_REGEX = {
-    shell: /(child_process|exec|spawn|execSync|shellt)/i,
-    filesystem_read: /(fs\.read|readFileSync|cat |grep )/i,
-    filesystem_write: /(fs\.write|writeFileSync|>>|echo .* >)/i,
-    network: /(fetch\(|axios|http\.request|curl|wget)/i,
-    browser_data: /(puppeteer|selenium|playwright|chrome-aws-lambda|cookies)/i,
-    env_access: /(process\.env|dotenv|\.env)/i
+    shell: /(child_process|exec|spawn|execSync|shellt|subprocess\.run|os\.system|popen)/i,
+    filesystem_read: /(fs\.read|readFileSync|cat |grep |open\(.*['"]r['"]\))/i,
+    filesystem_write: /(fs\.write|writeFileSync|>>|echo .* >|open\(.*['"]w['"]\))/i,
+    network: /(fetch\(|axios|http\.request|curl|wget|requests\.get|urllib|httpx)/i,
+    browser_data: /(puppeteer|selenium|playwright|chrome-aws-lambda|cookies|webdriver)/i,
+    env_access: /(process\.env|dotenv|\.env|os\.environ|os\.getenv)/i
 };
 
 const SENSITIVE_PATH_REGEX = [
@@ -32,14 +32,16 @@ const SENSITIVE_PATH_REGEX = [
     /\.kube/i,
     /AppData/i,
     /\/etc\/passwd/i,
-    /\/etc\/shadow/i
+    /\/etc\/shadow/i,
+    /secrets\.toml/i
 ];
 
 const HIGH_RISK_PATTERNS = [
     { pattern: /curl.*\|.*bash/i, id: "PIPE_BASH", severity: "critical", msg: "Detected 'curl | bash' pattern" },
     { pattern: /powershell.*-enc/i, id: "POWERSHELL_ENC", severity: "critical", msg: "Detected suspicious PowerShell encoding" },
     { pattern: /base64.*decode.*exec/i, id: "BASE64_EXEC", severity: "critical", msg: "Detected Base64 decoded execution" },
-    { pattern: /eval\s*\(/i, id: "EVAL_USAGE", severity: "high", msg: "Detected usage of 'eval()'" }
+    { pattern: /(eval|exec)\s*\(/i, id: "UNSAFE_EVAL", severity: "high", msg: "Detected usage of 'eval()' or 'exec()'" },
+    { pattern: /os\.system\s*\(/i, id: "OS_SYSTEM", severity: "high", msg: "Detected usage of 'os.system()'" }
 ];
 
 export function performStaticScan(pack: ScanPack): StaticScanResult {

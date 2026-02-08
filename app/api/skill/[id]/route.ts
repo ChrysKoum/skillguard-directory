@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabaseAdmin } from "@/lib/supabase";
 
 interface RouteParams {
     params: Promise<{ id: string }>;
@@ -10,7 +10,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         const { id } = await params;
 
         // 1. Fetch Skill
-        const { data: skill, error: skillError } = await (supabase
+        const { data: skill, error: skillError } = await (supabaseAdmin
             .from("skills") as any)
             .select("*")
             .eq("id", id)
@@ -21,7 +21,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         }
 
         // 2. Fetch Latest Scan
-        const { data: scan, error: scanError } = await (supabase
+        const { data: scan, error: scanError } = await (supabaseAdmin
             .from("scans") as any)
             .select("*")
             .eq("skill_id", id)
@@ -35,14 +35,14 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         }
 
         // 3. Fetch Artifacts for that scan
-        const { data: artifacts } = await (supabase
+        const { data: artifacts } = await (supabaseAdmin
             .from("artifacts") as any)
             .select("*")
             .eq("scan_id", scan.id);
 
         // 4. Generate Signed URLs for artifacts (Valid for 1 hour)
         const artifactsWithUrls = await Promise.all((artifacts || []).map(async (art: any) => {
-            const { data } = await supabase.storage
+            const { data } = await supabaseAdmin.storage
                 .from("skillguard")
                 .createSignedUrl(art.storage_path, 3600);
 

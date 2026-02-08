@@ -34,6 +34,11 @@ export interface DeepAuditResult {
         runtime_checks: string[];
         postrun_checks: string[];
     };
+    token_usage?: {
+        prompt: number;
+        response: number;
+        total: number;
+    };
 }
 
 const auditSchema = {
@@ -89,14 +94,21 @@ const auditSchema = {
     required: ["risk_level", "summary", "findings", "attack_chain", "safe_run_checklist", "policy_suggestions", "verification_plan"]
 };
 
+// Progress callback type for streaming updates
+export type AuditProgressCallback = (progress: {
+    message: string;
+    findingsCount?: number;
+    partialFindings?: string[];
+}) => Promise<void>;
+
 export async function performDeepAudit(
     pack: ScanPack,
     staticResult: StaticScanResult,
-    modelName: string = "gemini-2.0-flash-exp" // Use available model
+    modelName: string = "gemini-3-pro-preview",
+    onProgress?: AuditProgressCallback
 ): Promise<DeepAuditResult> {
 
     // 1. Construct the Prompt with FULL Context
-    // We format the codebase as a single XML-like block for clear separation
     const fileContext = pack.files.map(f => `
 <file path="${f.path}">
 ${f.content}
@@ -115,6 +127,11 @@ CONTEXT:
 - Use the "Static Analysis" results as a lead, but verify them with the actual code.
 - "Vibe Engineering" Track: Produce a "Verification Plan" that allows a user to safely test this agent.
 
+IMPORTANT CITATION RULES:
+- In \`findings[].evidence\`, you MUST provide the exact \`source\` (file path) and \`snippet\`.
+- If possible, include the line number in the snippet or title (e.g. "Line 45: bad_function()").
+- Do not invent file paths; use the ones provided in the <file path="..."> tags.
+
 INPUT DATA:
 - STATIC FINDINGS: ${staticContext}
 - FULL CODEBASE:
@@ -127,37 +144,146 @@ INSTRUCTIONS:
 4. Output STRICT JSON matching the schema.
 `;
 
-    try {
-        const model = genAI.getGenerativeModel({
-            model: modelName,
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: auditSchema as any
+    const modelsToTry = [
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-2.0-flash"
+    ];
+
+    let lastError;
+
+    for (const modelName of modelsToTry) {
+        try {
+            console.log(`[Gemini Audit] Attempting with model: ${modelName}`);
+            const model = genAI.getGenerativeModel({
+                model: modelName,
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: auditSchema as any
+                }
+            });
+
+            // Use streaming if callback provided, otherwise use regular generation
+            if (onProgress) {
+                await onProgress({ message: `Deep Audit: Analyzing with ${modelName}...` });
+
+                const result = await generateWithStreaming(model, systemPrompt, onProgress);
+                const parsed = JSON.parse(result.text) as DeepAuditResult;
+
+                parsed.token_usage = {
+                    prompt: result.usage?.promptTokenCount || 0,
+                    response: result.usage?.candidatesTokenCount || 0,
+                    total: result.usage?.totalTokenCount || 0
+                };
+                (parsed as any)._model_used = modelName;
+
+                await onProgress({
+                    message: `Found ${parsed.findings.length} potential issue(s).`,
+                    findingsCount: parsed.findings.length,
+                    partialFindings: parsed.findings.map(f => f.title)
+                });
+
+                return parsed;
+            } else {
+                // Non-streaming fallback
+                const result = await generateWithRetry(model, systemPrompt);
+                const responseText = result.response.text();
+                const usage = result.response.usageMetadata;
+
+                const parsed = JSON.parse(responseText) as DeepAuditResult;
+                parsed.token_usage = {
+                    prompt: usage?.promptTokenCount || 0,
+                    response: usage?.candidatesTokenCount || 0,
+                    total: usage?.totalTokenCount || 0
+                };
+                (parsed as any)._model_used = modelName;
+
+                return parsed;
             }
-        });
 
-        const result = await model.generateContent(systemPrompt);
-        const responseText = result.response.text();
-
-        return JSON.parse(responseText) as DeepAuditResult;
-
-    } catch (error) {
-        console.error("[Gemini Audit] Failed:", error);
-        // Return a fallback error object to strict type
-        return {
-            risk_level: "high",
-            summary: "Audit Failed due to API error. Assume HIGH risk.",
-            findings: [{
-                title: "Audit Error",
-                severity: "critical",
-                why_it_matters: "Gemini API failed to process request.",
-                evidence: [],
-                recommended_fix: "Retry scan."
-            }],
-            attack_chain: [],
-            safe_run_checklist: ["Do not run until scanned."],
-            policy_suggestions: { allow_domains: [], deny_paths: [], tool_restrictions: [] },
-            verification_plan: { preflight_checks: [], runtime_checks: [], postrun_checks: [] }
-        };
+        } catch (error) {
+            console.warn(`[Gemini Audit] Failed with ${modelName}:`, error);
+            lastError = error;
+        }
     }
+
+    // All models failed
+    console.error("[Gemini Audit] All models failed.", lastError);
+    return {
+        risk_level: "high",
+        summary: `Audit Failed on all models (Pro, Flash). Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+        findings: [{
+            title: "Deep Audit Unavailable",
+            severity: "medium",
+            why_it_matters: "AI analysis could not complete. Rely on Static Analysis results.",
+            evidence: [],
+            recommended_fix: "Try rescanning later."
+        }],
+        attack_chain: [],
+        safe_run_checklist: ["Manual review required."],
+        policy_suggestions: { allow_domains: [], deny_paths: [], tool_restrictions: [] },
+        verification_plan: { preflight_checks: [], runtime_checks: [], postrun_checks: [] }
+    };
+}
+
+async function generateWithStreaming(
+    model: any,
+    prompt: string,
+    onProgress: AuditProgressCallback
+): Promise<{ text: string; usage: any }> {
+    let fullText = "";
+    let findingsFound = 0;
+    let lastFindingCount = 0;
+
+    const result = await model.generateContentStream(prompt);
+
+    for await (const chunk of result.stream) {
+        const chunkText = chunk.text();
+        fullText += chunkText;
+
+        // Try to count findings as they appear in the stream
+        const findingsMatches = fullText.match(/"title"\s*:\s*"[^"]+"/g);
+        findingsFound = findingsMatches ? findingsMatches.length : 0;
+
+        // Update progress when new findings are detected
+        if (findingsFound > lastFindingCount) {
+            lastFindingCount = findingsFound;
+            await onProgress({
+                message: `Analyzing... Found ${findingsFound} issue(s) so far`,
+                findingsCount: findingsFound
+            });
+        }
+    }
+
+    const response = await result.response;
+    return {
+        text: fullText || response.text(),
+        usage: response.usageMetadata
+    };
+}
+
+
+async function generateWithRetry(model: any, prompt: string, retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await model.generateContent(prompt);
+        } catch (error: any) {
+            // Check for 429 or quota related messages
+            const isRateLimit = error.status === 429 ||
+                (error.message && error.message.includes("429")) ||
+                (error.message && error.message.includes("Quota exceeded"));
+
+            if (isRateLimit) {
+                if (i === retries - 1) throw error; // Max retries reached
+
+                // Backoff: 20s, 40s, 60s
+                const delay = 20000 * (i + 1);
+                console.log(`[Gemini Audit] Rate limited (Attempt ${i + 1}/${retries}). Retrying in ${delay / 1000}s...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+            }
+            throw error; // Not a rate limit error, rethrow
+        }
+    }
+    throw new Error("Analysis failed after retries");
 }
