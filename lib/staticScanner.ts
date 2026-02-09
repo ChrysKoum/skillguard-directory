@@ -94,10 +94,32 @@ export function performStaticScan(pack: ScanPack): StaticScanResult {
         }
 
         // Check Injection Patterns (misleading comments/prompt injection)
-        for (const rule of INJECTION_PATTERNS) {
-            if (rule.pattern.test(file.content)) {
-                injectionEvidence.push(`${file.path}: ${rule.msg}`);
-                score += 25; // Significant penalty for injection attempts
+
+        // PASS B: Skip heuristics for known noise/content directories and lockfiles
+        // We do NOT exclude .json/.yaml globally as they may contain agent configs.
+        const isNoise = file.path.includes("docs/") ||
+            file.path.includes("music/") ||
+            file.path.includes("content/") ||
+            file.path.includes("assets/") ||
+            file.path.includes("examples/") ||
+            file.path.includes("test/") ||
+            file.path.includes("tests/") ||
+            file.path.includes("__tests__/") ||
+            file.path.includes("spec/") ||
+            file.path.toLowerCase().endsWith("readme.md") ||
+            file.path.endsWith("package-lock.json") ||
+            file.path.endsWith("yarn.lock") ||
+            file.path.endsWith("pnpm-lock.yaml") ||
+            file.path.endsWith(".csv") ||
+            file.path.endsWith(".txt") ||
+            file.path.endsWith(".map"); // Source maps
+
+        if (!isNoise) {
+            for (const rule of INJECTION_PATTERNS) {
+                if (rule.pattern.test(file.content)) {
+                    injectionEvidence.push(`${file.path}: ${rule.msg}`);
+                    score += 25; // Significant penalty for injection attempts
+                }
             }
         }
 

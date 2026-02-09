@@ -16,7 +16,7 @@
 -   **Framework**: Next.js 16 (App Router)
 -   **Language**: TypeScript
 -   **Database**: Supabase (PostgreSQL + Storage)
--   **AI**: Google Generative AI SDK (`gemini-2.0-flash-exp` / `gemini-3.0-pro`)
+-   **AI**: Google Generative AI SDK (`gemini-3.0-flash-exp` / `gemini-3.0-pro`)
 -   **UI**: Tailwind CSS + Lucide React
 
 ## 📦 Setup

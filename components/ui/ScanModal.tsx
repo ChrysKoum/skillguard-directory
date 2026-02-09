@@ -3,13 +3,29 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { Loader2, Terminal, AlertTriangle, X } from "lucide-react";
 
+interface LogEntry {
+    text: string;
+    type: "info" | "file" | "error" | "success" | "warning" | "model";
+}
+
 interface ScanModalProps {
     isOpen: boolean;
     onClose: () => void;
     status: "idle" | "scanning" | "error" | "complete";
-    logs: string[];
+    logs: LogEntry[];
     errorMsg?: string;
 }
+
+const getLogColor = (type: LogEntry["type"]) => {
+    switch (type) {
+        case "error": return "text-red-400";
+        case "success": return "text-green-400";
+        case "warning": return "text-yellow-400";
+        case "model": return "text-purple-400";
+        case "file": return "text-cyan-400";
+        default: return "text-slate-400";
+    }
+};
 
 export function ScanModal({ isOpen, onClose, status, logs, errorMsg }: ScanModalProps) {
     if (!isOpen) return null;
@@ -65,16 +81,19 @@ export function ScanModal({ isOpen, onClose, status, logs, errorMsg }: ScanModal
                         </div>
                     )}
 
-                    <div className="bg-slate-950 rounded-lg border border-slate-800 p-4 font-mono text-xs text-green-400 h-64 overflow-y-auto">
+                    <div className="bg-slate-950 rounded-lg border border-slate-800 p-4 font-mono text-xs h-96 overflow-y-auto">
                         <div className="flex items-center gap-2 border-b border-slate-800 pb-2 mb-2 text-slate-500 sticky top-0 bg-slate-950">
                             <Terminal className="w-3 h-3" />
                             <span>LIVE LOGS</span>
                         </div>
                         <div className="space-y-1">
                             {logs.map((l, i) => (
-                                <div key={i}>{l}</div>
+                                <div key={i} className={`${getLogColor(l.type)} flex gap-2`}>
+                                    <span className="text-slate-700">›</span>
+                                    <span>{l.text}</span>
+                                </div>
                             ))}
-                            {status === "scanning" && <div className="animate-pulse">_</div>}
+                            {status === "scanning" && <div className="text-green-500 animate-pulse">_</div>}
                         </div>
                     </div>
                 </div>

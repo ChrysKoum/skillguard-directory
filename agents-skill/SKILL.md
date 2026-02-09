@@ -14,12 +14,10 @@ This skill allows an agent to request a security audit of *another* agent's code
 ## Usage
 
 ### 1. Request Audit
-call `post_scan` with the GitHub URL of the target agent.
+Run the scan script with the target GitHub URL:
 
-```json
-{
-  "url": "https://github.com/owner/repo"
-}
+```bash
+node scripts/scan.js "https://github.com/owner/repo"
 ```
 
 **Returns:**
@@ -32,12 +30,10 @@ call `post_scan` with the GitHub URL of the target agent.
 ```
 
 ### 2. Poll Results
-call `get_report` with the `skillId`.
+Check the status using the `skillId` from step 1:
 
-```json
-{
-  "skillId": "uuid..."
-}
+```bash
+node scripts/report.js "SKILL_ID_HERE"
 ```
 
 **Returns:**
