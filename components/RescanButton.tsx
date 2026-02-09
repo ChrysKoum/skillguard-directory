@@ -130,7 +130,7 @@ export function RescanButton({ url }: { url: string }) {
                         }
 
                         const displayTotal = totalRepoFiles || criticalFiles;
-                        addLog(`🤖 Using Gemini 3 Pro to analyze ${criticalFiles}/${displayTotal} critical files (${tokenCount}k tokens)`, "model");
+                        addLog(`🤖 Using Gemini AI to analyze ${criticalFiles}/${displayTotal} critical files (${tokenCount}k tokens)`, "model");
                     }
                     // Streaming updates from Gemini
                     else if (msg.includes("Analyzing with")) {

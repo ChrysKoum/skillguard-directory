@@ -113,7 +113,11 @@ export default function AboutPage() {
                     </h2>
                     <div className="bg-red-950/20 border border-red-900/50 rounded-xl p-8 flex flex-col md:flex-row items-center gap-8">
                         <div className="transform scale-125">
-                            <ExtremeDangerBadge />
+                            <ExtremeDangerBadge evidence={[
+                                "Attempts to bypass previous instructions",
+                                "Attempts to suppress reporting",
+                                "Suspicious safety marker: SAFE_CODE_MARKER"
+                            ]} />
                         </div>
                         <div className="space-y-4">
                             <p className="text-slate-300 leading-relaxed">

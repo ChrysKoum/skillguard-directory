@@ -241,7 +241,7 @@ export default function ScanPage() {
                                 criticalFiles = namedCount + (othersMatch ? parseInt(othersMatch[1]) : 0);
                             }
                             const displayTotal = totalRepoFiles || criticalFiles;
-                            addLog(`🤖 Using Gemini 3 Pro to analyze ${criticalFiles}/${displayTotal} critical files (${tokenCount}k tokens)`, "model", true);
+                            addLog(`🤖 Using Gemini AI to analyze ${criticalFiles}/${displayTotal} critical files (${tokenCount}k tokens)`, "model", true);
                             setLiveStatus(`🤖 Gemini analyzing ${criticalFiles} files...`);
                             const files = parseFilesFromMessage(msg);
                             if (files.length > 0) startFileAnimation(files);
@@ -254,7 +254,7 @@ export default function ScanPage() {
                             const displayCritical = criticalFiles || totalRepoFiles || "?";
                             const displayTotal = totalRepoFiles || criticalFiles || "?";
                             const displayTokens = tokenCount || "?";
-                            addLog(`🤖 Using Gemini 3 Pro to analyze ${displayCritical}/${displayTotal} critical files (${displayTokens}k tokens)`, "model", true);
+                            addLog(`🤖 Using Gemini AI to analyze ${displayCritical}/${displayTotal} critical files (${displayTokens}k tokens)`, "model", true);
                             setLiveStatus(`🤖 ${modelMatch ? modelMatch[0] : "Gemini"} analyzing...`);
                             const placeholderFiles = Array.from({ length: criticalFiles || 20 }, (_, i) => `file-${i + 1}.py`);
                             startFileAnimation(placeholderFiles);

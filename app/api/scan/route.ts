@@ -224,10 +224,10 @@ async function runAnalysisPipeline(scanId: string, url: string) {
                 criticalFiles: smartPack.files.length,
                 tokenCount: tokenCountK
             },
-            `Deep Audit: Asking Gemini 3 Pro to review ${keyFiles} ${remaining > 0 ? `+ ${remaining} others` : ""} (${tokenCountK}k tokens)...`
+            `Deep Audit: Requesting Gemini AI review of ${keyFiles} ${remaining > 0 ? `+ ${remaining} others` : ""} (${tokenCountK}k tokens)...`
         );
 
-        // D. Deep Audit (Gemini 3 Pro -> Flash Fallback) with STREAMING feedback
+        // D. Deep Audit with STREAMING feedback
         // Store file info for the streaming callback to preserve
         const fileInfo = {
             totalRepoFiles: pack.files.length,
