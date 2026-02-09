@@ -14,6 +14,7 @@ interface LogEntry {
 export default function ScanPage() {
     const router = useRouter();
     const [input, setInput] = useState("");
+    const [inputError, setInputError] = useState("");
     const [isScanning, setIsScanning] = useState(false);
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [error, setError] = useState("");
@@ -80,12 +81,39 @@ export default function ScanPage() {
         setCurrentFile("");
     };
 
+    const validateInput = (value: string) => {
+        if (!value.trim()) return false;
+
+        // Strict GitHub URL validation
+        // Allowed: https://github.com/owner/repo or https://github.com/owner/repo/tree/branch...
+        const githubRegex = /^https:\/\/github\.com\/[\w-]+\/[\w-._]+(\/.*)?$/;
+
+        if (!githubRegex.test(value.trim())) {
+            setInputError("Please enter a valid GitHub repository URL (e.g. https://github.com/owner/repo)");
+            return false;
+        }
+
+        if (value.trim().split(/\s+/).length > 1) {
+            setInputError("Please enter only one URL");
+            return false;
+        }
+
+        setInputError("");
+        return true;
+    };
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value;
+        setInput(val);
+        if (inputError) {
+            if (val.startsWith("https://github.com/")) setInputError("");
+        }
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!input.includes("github.com")) {
-            alert("Please enter a valid GitHub URL");
-            return;
-        }
+
+        if (!validateInput(input)) return;
 
         setIsScanning(true);
         setError("");
@@ -103,7 +131,7 @@ export default function ScanPage() {
             const res = await fetch("/api/scan", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ url: input }),
+                body: JSON.stringify({ url: input.trim() }),
             });
 
             const data = await res.json();
@@ -129,10 +157,10 @@ export default function ScanPage() {
             let lastMsg = "";
             let lastIssueCount = 0;
             let filesInitialized = false;
-            let totalRepoFiles = 0;  // Track total files in repo
-            let criticalFiles = 0;   // Track critical files for deep audit
-            let tokenCount = "?";    // Track token count
-            let shownSourceInfo = false;  // Track if we've shown source info
+            let totalRepoFiles = 0;
+            let criticalFiles = 0;
+            let tokenCount = "?";
+            let shownSourceInfo = false;
 
             while (attempts < 200) {
                 await delay(1500);
@@ -151,7 +179,6 @@ export default function ScanPage() {
                     const msg = scan.stage_status?.msg || scan.progress_msg || "";
                     console.log(`[UI] Poll #${attempts}: status=${scan.status}, msg="${msg}"`);
 
-                    // DONE!
                     if (scan.status === "done" || scan.status === "done_with_warnings") {
                         stopFileAnimation();
                         setLiveStatus("");
@@ -174,129 +201,70 @@ export default function ScanPage() {
                         throw new Error(scan.error_text || "Scan failed");
                     }
 
-                    // Process message
                     if (msg && msg !== lastMsg) {
                         lastMsg = msg;
                         console.log(`[UI] Processing new message: "${msg}"`);
-                        console.log(`[UI] filesInitialized=${filesInitialized}`);
 
-                        // Extract file counts from stage_status (stored by backend)
                         const stageStatus = scan.stage_status || {};
-                        if (stageStatus.totalRepoFiles && !totalRepoFiles) {
-                            totalRepoFiles = stageStatus.totalRepoFiles;
-                            console.log(`[UI] Got totalRepoFiles from stage_status: ${totalRepoFiles}`);
-                        }
-                        if (stageStatus.criticalFiles) {
-                            criticalFiles = stageStatus.criticalFiles;
-                            console.log(`[UI] Got criticalFiles from stage_status: ${criticalFiles}`);
-                        }
-                        if (stageStatus.tokenCount) {
-                            tokenCount = stageStatus.tokenCount;
-                            console.log(`[UI] Got tokenCount from stage_status: ${tokenCount}`);
-                        }
+                        if (stageStatus.totalRepoFiles && !totalRepoFiles) totalRepoFiles = stageStatus.totalRepoFiles;
+                        if (stageStatus.criticalFiles) criticalFiles = stageStatus.criticalFiles;
+                        if (stageStatus.tokenCount) tokenCount = stageStatus.tokenCount;
 
-                        // Show source info once (official source + subdirectory)
                         if (!shownSourceInfo && stageStatus.owner) {
                             shownSourceInfo = true;
-
-                            // Show official source if detected
-                            if (stageStatus.officialSource) {
-                                addLog(`🏢 Official ${stageStatus.officialSource} source`, "success");
-                            }
-
-                            // Show subdirectory if scanning a specific path
-                            if (stageStatus.subpath) {
-                                addLog(`📁 Subdirectory: /${stageStatus.subpath}`, "info");
-                            }
+                            if (stageStatus.officialSource) addLog(`🏢 Official ${stageStatus.officialSource} source`, "success");
+                            if (stageStatus.subpath) addLog(`📁 Subdirectory: /${stageStatus.subpath}`, "info");
                         }
 
-                        // Fetching repository
                         if (msg.includes("Fetching repository")) {
-                            console.log("[UI] -> Matched: Fetching repository");
                             setLiveStatus("📥 Downloading repository...");
-                        }
-                        // Analyzing X files - store the total
-                        else if (msg.match(/Analyzing \d+ files/)) {
-                            console.log("[UI] -> Matched: Analyzing X files");
+                        } else if (msg.match(/Analyzing \d+ files/)) {
                             const match = msg.match(/(\d+)\s*files/);
                             if (match) {
                                 totalRepoFiles = parseInt(match[1]);
-                                console.log(`[UI] -> Total repo files: ${totalRepoFiles}`);
                                 addLog(`📂 Found ${totalRepoFiles} files in repository`, "info");
                                 setLiveStatus(`📂 Analyzing ${totalRepoFiles} files...`);
                             }
-                        }
-                        // Processing for deep audit
-                        else if (msg.includes("Processing") && msg.includes("critical")) {
-                            console.log("[UI] -> Matched: Processing critical");
+                        } else if (msg.includes("Processing") && msg.includes("critical")) {
                             addLog("🔍 Selecting critical files for deep audit...", "info");
                             setLiveStatus("🔍 Selecting critical files...");
-                        }
-                        // Deep Audit asking Gemini (with file list) - USE stage_status values, fallback to parsing
-                        else if (msg.includes("Deep Audit:") && msg.includes("review") && !filesInitialized) {
-                            console.log("[UI] -> Matched: Deep Audit with review (has files)");
+                        } else if (msg.includes("Deep Audit:") && msg.includes("review") && !filesInitialized) {
                             filesInitialized = true;
-
-                            // PREFER stage_status values (already extracted above), fallback to parsing from message
                             if (!tokenCount || tokenCount === "?") {
                                 const tokenMatch = msg.match(/\(([\d.]+)k?\s*tokens\)/);
                                 tokenCount = tokenMatch ? tokenMatch[1] : "?";
                             }
-                            console.log(`[UI] -> Using tokenCount: ${tokenCount}k`);
-
                             if (!criticalFiles) {
                                 const othersMatch = msg.match(/\+ (\d+) others/);
                                 const namedFilesMatch = msg.match(/review\s+([^(]+?)(?:\s+\+|\s+\()/);
                                 const namedCount = namedFilesMatch ? namedFilesMatch[1].split(",").map((s: string) => s.trim()).filter((s: string) => s.length > 0).length : 0;
                                 criticalFiles = namedCount + (othersMatch ? parseInt(othersMatch[1]) : 0);
                             }
-                            console.log(`[UI] -> Using criticalFiles: ${criticalFiles}`);
-
-                            // Use values for display
                             const displayTotal = totalRepoFiles || criticalFiles;
                             addLog(`🤖 Using Gemini 3 Pro to analyze ${criticalFiles}/${displayTotal} critical files (${tokenCount}k tokens)`, "model", true);
                             setLiveStatus(`🤖 Gemini analyzing ${criticalFiles} files...`);
-
-                            // Parse files for animation
                             const files = parseFilesFromMessage(msg);
                             if (files.length > 0) startFileAnimation(files);
-                        }
-                        // Analyzing with model (fallback if we missed the "review" message)
-                        else if (msg.includes("Analyzing with") && !filesInitialized) {
-                            console.log("[UI] -> Matched: Analyzing with (FALLBACK - missed review)");
+                        } else if (msg.includes("Analyzing with") && !filesInitialized) {
                             filesInitialized = true;
                             const modelMatch = msg.match(/gemini[^\s]*/i);
-                            console.log(`[UI] -> Model match: ${modelMatch?.[0]}, totalRepoFiles=${totalRepoFiles}, criticalFiles=${criticalFiles}, tokenCount=${tokenCount}`);
-
-                            // If we have file counts from stage_status, show them properly
                             if (totalRepoFiles && !logs.some(l => l.text.includes("Found") && l.text.includes("files"))) {
                                 addLog(`📂 Found ${totalRepoFiles} files in repository`, "info");
                             }
-
-                            // Show the Gemini message with actual counts from stage_status
                             const displayCritical = criticalFiles || totalRepoFiles || "?";
                             const displayTotal = totalRepoFiles || criticalFiles || "?";
                             const displayTokens = tokenCount || "?";
                             addLog(`🤖 Using Gemini 3 Pro to analyze ${displayCritical}/${displayTotal} critical files (${displayTokens}k tokens)`, "model", true);
                             setLiveStatus(`🤖 ${modelMatch ? modelMatch[0] : "Gemini"} analyzing...`);
-
-                            // We can still animate with placeholder files
                             const placeholderFiles = Array.from({ length: criticalFiles || 20 }, (_, i) => `file-${i + 1}.py`);
                             startFileAnimation(placeholderFiles);
-                        }
-                        // Already initialized, just update status
-                        else if (msg.includes("Analyzing with") && filesInitialized) {
-                            console.log("[UI] -> Matched: Analyzing with (already initialized)");
+                        } else if (msg.includes("Analyzing with") && filesInitialized) {
                             const modelMatch = msg.match(/gemini[^\s]*/i);
                             setLiveStatus(`🤖 ${modelMatch ? modelMatch[0] : "Gemini"} analyzing...`);
-                        }
-                        // Issue found during stream
-                        else if (msg.includes("issue(s) so far")) {
-                            console.log("[UI] -> Matched: Issue count update");
+                        } else if (msg.includes("issue(s) so far")) {
                             const countMatch = msg.match(/(\d+)\s*issue/);
                             if (countMatch) {
                                 const newCount = parseInt(countMatch[1], 10);
-                                console.log(`[UI] -> newCount=${newCount}, lastIssueCount=${lastIssueCount}`);
                                 if (newCount > lastIssueCount) {
                                     for (let i = lastIssueCount; i < newCount; i++) {
                                         addLog(`🔴 Issue #${i + 1} detected!`, "error", true);
@@ -305,20 +273,11 @@ export default function ScanPage() {
                                     setFindingsCount(newCount);
                                 }
                             }
-                        }
-                        // Final potential issues
-                        else if (msg.includes("Found") && msg.includes("potential")) {
-                            console.log("[UI] -> Matched: Found potential issues");
+                        } else if (msg.includes("Found") && msg.includes("potential")) {
                             setLiveStatus("✅ Finalizing results...");
-                        }
-                        // Analysis Complete
-                        else if (msg === "Analysis Complete.") {
-                            console.log("[UI] -> Matched: Analysis Complete");
+                        } else if (msg === "Analysis Complete.") {
                             setLiveStatus("✅ Done! Preparing report...");
-                        }
-                        // Fallback - show message as-is
-                        else {
-                            console.log("[UI] -> FALLBACK: No specific match");
+                        } else {
                             setLiveStatus(`🔄 ${msg}`);
                         }
                     }
@@ -326,9 +285,7 @@ export default function ScanPage() {
                     console.error(`[UI] Poll error:`, pollError);
                 }
             }
-
             throw new Error("Timeout - the scan is taking longer than expected");
-
         } catch (err) {
             stopFileAnimation();
             setError(err instanceof Error ? err.message : "Unknown error");
@@ -359,10 +316,10 @@ export default function ScanPage() {
                     <input
                         type="text"
                         value={input}
-                        onChange={e => setInput(e.target.value)}
+                        onChange={handleInputChange}
                         disabled={isScanning}
                         placeholder="https://github.com/owner/repo"
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-5 py-4 pr-28 text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 font-mono text-sm"
+                        className={`w-full bg-slate-900 border ${inputError ? 'border-red-500/50 focus:ring-red-500/20' : 'border-slate-700 focus:ring-indigo-500'} rounded-xl px-5 py-4 pr-28 text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 disabled:opacity-50 font-mono text-sm transition-all`}
                     />
                     <button
                         type="submit"
@@ -372,6 +329,20 @@ export default function ScanPage() {
                         {isScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                         {isScanning ? "Scanning..." : "Scan"}
                     </button>
+
+                    <AnimatePresence>
+                        {inputError && (
+                            <motion.div
+                                initial={{ opacity: 0, y: -10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -10 }}
+                                className="absolute left-0 -bottom-8 text-red-400 text-xs font-medium flex items-center gap-1.5"
+                            >
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                {inputError}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
             </form>
 

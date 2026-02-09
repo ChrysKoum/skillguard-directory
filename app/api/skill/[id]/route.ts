@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { getTierFromScore } from "@/lib/safetyScore";
 
 interface RouteParams {
     params: Promise<{ id: string }>;
@@ -52,10 +53,45 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
             };
         }));
 
+        // 5. Construct Report Summary
+        const safetyScore = scan.deep_json?.safety_score || 0;
+        const tier = getTierFromScore(safetyScore);
+
+        // Find specific artifacts
+        const policyArtifact = artifactsWithUrls.find((a: any) => a.artifact_type === "policy_json");
+        const verificationArtifact = artifactsWithUrls.find((a: any) => a.artifact_type === "verification_md");
+
+        // Trust Badge (Shields.io for now)
+        const badgeColor =
+            tier === "obsidian" || tier === "diamond" ? "brightgreen" :
+                tier === "platinum" || tier === "gold" ? "green" :
+                    tier === "silver" ? "yellow" :
+                        tier === "bronze" || tier === "iron" ? "orange" : "red";
+
+        const trustBadgeUrl = `https://img.shields.io/badge/Security_Tier-${tier.toUpperCase()}-${badgeColor}?style=for-the-badge&logo=shield`;
+
+        const trustMeta = {
+            schema_version: "1.0",
+            skill_id: id,
+            safety_score: safetyScore,
+            tier: tier,
+            verified: tier === "platinum" || tier === "diamond" || tier === "obsidian",
+            scan_time: scan.created_at,
+            top_risks: (scan.deep_json?.findings || []).slice(0, 3).map((f: any) => f.title)
+        };
+
         return NextResponse.json({
             skill,
             scan,
-            artifacts: artifactsWithUrls
+            artifacts: artifactsWithUrls,
+            report_summary: {
+                safety_score: safetyScore,
+                risk_tier: tier,
+                trust_badge_url: trustBadgeUrl,
+                trust_meta: trustMeta,
+                policy_url: policyArtifact?.download_url || null,
+                verification_plan_url: verificationArtifact?.download_url || null
+            }
         });
 
     } catch (err) {

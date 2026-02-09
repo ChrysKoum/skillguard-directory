@@ -18,6 +18,28 @@ const scanSchema = z.object({
 
 export async function POST(req: NextRequest) {
     try {
+        // 0. Rate Limiting (Global)
+        const limitStr = process.env.SCAN_LIMIT_PER_HOUR;
+        if (limitStr) {
+            const limit = parseInt(limitStr, 10);
+            if (!isNaN(limit) && limit > 0) {
+                const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+                const { count, error: countError } = await supabaseAdmin
+                    .from("scans")
+                    .select("*", { count: "exact", head: true })
+                    .gte("created_at", oneHourAgo);
+
+                if (countError) {
+                    console.error("Rate limit check failed", countError);
+                } else if (count !== null && count >= limit) {
+                    return NextResponse.json(
+                        { error: `Global scan limit reached (${limit}/hour). Please try again later.` },
+                        { status: 429 }
+                    );
+                }
+            }
+        }
+
         const body = await req.json();
         const { url, forceRescan } = scanSchema.parse(body);
 

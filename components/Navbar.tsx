@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ShieldCheck } from "lucide-react";
+import Image from "next/image";
 
 export function Navbar() {
     return (
@@ -7,7 +7,13 @@ export function Navbar() {
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="flex items-center justify-between h-16">
                     <Link href="/" className="flex items-center gap-2 group">
-                        <ShieldCheck className="w-8 h-8 text-indigo-500 group-hover:text-indigo-400 transition-colors" />
+                        <Image
+                            src="/logo_64_64.png"
+                            alt="SkillGuard Logo"
+                            width={32}
+                            height={32}
+                            className="group-hover:scale-105 transition-transform"
+                        />
                         <span className="font-bold text-xl tracking-tight text-slate-100">
                             Skill<span className="text-indigo-500">Guard</span> Directory
                         </span>
