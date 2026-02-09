@@ -1,0 +1,15 @@
+SkillGuard
+Copyright 2026 SkillGuard Contributors
+
+This product includes software developed at:
+- Vercel (Next.js) - https://nextjs.org
+- Supabase - https://supabase.com
+- Google (Gemini AI SDK) - https://ai.google.dev
+
+Third-party libraries used:
+- React (MIT License) - https://reactjs.org
+- TailwindCSS (MIT License) - https://tailwindcss.com
+- Framer Motion (MIT License) - https://www.framer.com/motion
+- Lucide Icons (ISC License) - https://lucide.dev
+- @google/generative-ai (Apache 2.0) - https://www.npmjs.com/package/@google/generative-ai
+- @supabase/supabase-js (MIT License) - https://github.com/supabase/supabase-js

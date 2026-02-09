@@ -50,3 +50,65 @@
 
 ## 🛡️ Antigravity Integration
 This project includes a `SKILL.md` definition in `antigravity-skill/`, allowing it to be used *by* other Antigravity agents to self-audit or audit peers.
+
+---
+
+## 🧪 Testing Instructions
+
+### Quick Test (< 1 minute)
+1. Visit https://skillguard-directory-one.vercel.app
+2. Click **"Scan Agent"** in the navbar
+3. Paste a public GitHub repo URL, e.g.: `https://github.com/a-church-ai/church`
+4. Watch the real-time terminal output
+5. View the security report with tier badge
+
+### API Test
+```bash
+# Friendly URL format
+curl https://skillguard-directory-one.vercel.app/a-church-ai/church
+
+# By skill ID
+curl https://skillguard-directory-one.vercel.app/api/skill/525485f2-1ce2-4218-905a-f2accc28830f
+```
+
+### Notes
+- **No login required**
+- Scans take 30-60 seconds depending on repo size
+- Rate limited to prevent abuse
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Bug reporting guidelines
+- Development setup
+- Pull request process
+- Code style requirements
+
+### Report Issues
+- 🐛 [Bug Reports](https://github.com/ChrysKoworki/skillguard-directory/issues/new?template=bug_report.md)
+- 💡 [Feature Requests](https://github.com/ChrysKoworki/skillguard-directory/issues/new?template=feature_request.md)
+
+---
+
+## 📖 Citing SkillGuard
+
+If you use SkillGuard in academic research, please cite:
+
+```bibtex
+@software{skillguard2026,
+  author = {SkillGuard Contributors},
+  title = {SkillGuard: AI Agent Security Auditing Platform},
+  year = {2026},
+  url = {https://github.com/ChrysKoworki/skillguard-directory},
+  note = {Deep security analysis for AI agents using Gemini 3 Pro}
+}
+```
+
+---
+
+## 📄 License
+
+Apache 2.0 License - see [LICENSE](LICENSE) for details. Attribution is **required** when using or redistributing this software.
+
