@@ -5,14 +5,25 @@ const fs = require('fs');
 const API_BASE = process.env.SKILLGUARD_API_URL || "http://localhost:3000";
 
 async function getReport() {
-    const skillId = process.argv[2];
-    if (!skillId) {
-        console.error("Usage: node report.js <skillId>");
+    const input = process.argv[2];
+    if (!input) {
+        console.error("Usage: node report.js <skillId|owner/repo>");
+        console.error("Examples:");
+        console.error("  node report.js 525485f2-1ce2-4218-905a-f2accc28830f");
+        console.error("  node report.js a-church-ai/church");
         process.exit(1);
     }
 
     try {
-        const response = await fetch(`${API_BASE}/api/skill/${skillId}`);
+        // Detect if input is a UUID or slug (owner/repo)
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input);
+        const url = isUUID
+            ? `${API_BASE}/api/skill/${input}`
+            : `${API_BASE}/${input}`;
+
+        const response = await fetch(url, {
+            headers: { "Accept": "application/json" }
+        });
 
         if (!response.ok) {
             const error = await response.text();
@@ -29,3 +40,4 @@ async function getReport() {
 }
 
 getReport();
+

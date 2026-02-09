@@ -23,13 +23,25 @@ const TOOLS = [
     },
     {
         name: "get_scan_report",
-        description: "Get the status and results of a security scan.",
+        description: "Get the status and results of a security scan by skill ID.",
         inputSchema: {
             type: "object",
             properties: {
-                skillId: { type: "string", description: "The ID returned by scan_repository" }
+                skillId: { type: "string", description: "The skill UUID returned by scan_repository" }
             },
             required: ["skillId"]
+        }
+    },
+    {
+        name: "get_report_by_slug",
+        description: "Get the security report using a friendly owner/repo slug (e.g. 'a-church-ai/church').",
+        inputSchema: {
+            type: "object",
+            properties: {
+                owner: { type: "string", description: "GitHub owner/org name" },
+                repo: { type: "string", description: "GitHub repository name" }
+            },
+            required: ["owner", "repo"]
         }
     }
 ];
@@ -47,7 +59,17 @@ async function handleCallTool(name, args) {
     }
 
     if (name === "get_scan_report") {
-        const res = await fetch(`${API_BASE}/api/skill/${args.skillId}`);
+        const res = await fetch(`${API_BASE}/api/skill/${args.skillId}`, {
+            headers: { "Accept": "application/json" }
+        });
+        if (!res.ok) throw new Error(await res.text());
+        return await res.json();
+    }
+
+    if (name === "get_report_by_slug") {
+        const res = await fetch(`${API_BASE}/${args.owner}/${args.repo}`, {
+            headers: { "Accept": "application/json" }
+        });
         if (!res.ok) throw new Error(await res.text());
         return await res.json();
     }
