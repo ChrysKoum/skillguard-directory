@@ -24,6 +24,7 @@ export interface DeepAuditResult {
     findings: AuditFinding[];
     attack_chain: string[];
     safe_run_checklist: string[];
+    suggested_category: string;  // LLM-suggested category for the skill
     policy_suggestions: {
         allow_domains: string[];
         deny_paths: string[];
@@ -89,9 +90,22 @@ const auditSchema = {
                 postrun_checks: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING } }
             },
             required: ["preflight_checks", "runtime_checks", "postrun_checks"]
+        },
+        suggested_category: {
+            type: SchemaType.STRING,
+            enum: [
+                "Coding Agents & IDEs",
+                "DevOps & Cloud",
+                "Security & Passwords",
+                "AI & LLMs",
+                "Web & Frontend Development",
+                "Productivity & Tasks",
+                "Data & Analytics",
+                "Uncategorized"
+            ]
         }
     },
-    required: ["risk_level", "summary", "findings", "attack_chain", "safe_run_checklist", "policy_suggestions", "verification_plan"]
+    required: ["risk_level", "summary", "findings", "attack_chain", "safe_run_checklist", "policy_suggestions", "verification_plan", "suggested_category"]
 };
 
 // Progress callback type for streaming updates
@@ -221,6 +235,7 @@ INSTRUCTIONS:
         }],
         attack_chain: [],
         safe_run_checklist: ["Manual review required."],
+        suggested_category: "Uncategorized",
         policy_suggestions: { allow_domains: [], deny_paths: [], tool_restrictions: [] },
         verification_plan: { preflight_checks: [], runtime_checks: [], postrun_checks: [] }
     };

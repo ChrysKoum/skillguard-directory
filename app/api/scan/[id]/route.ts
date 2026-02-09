@@ -20,7 +20,7 @@ export async function GET(
             return NextResponse.json({ error: error.message }, { status: 404 });
         }
 
-        console.log(`[GET /api/scan/${id}] Found scan with status: ${scan.status}`);
+        console.log(`[GET /api/scan/${id}] Found scan with status: ${scan.status}, progress_msg: "${scan.progress_msg || 'NULL'}", stage_status: ${JSON.stringify(scan.stage_status || {})}`);
         return NextResponse.json(scan);
     } catch (err) {
         console.error(`[GET /api/scan/${id}] Exception:`, err);

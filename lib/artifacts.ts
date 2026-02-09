@@ -3,7 +3,8 @@ import { supabaseAdmin } from "./supabase";
 
 export async function generateAndStoreArtifacts(
     scanId: string,
-    auditResult: DeepAuditResult
+    auditResult: DeepAuditResult,
+    reportData?: any
 ): Promise<string[]> {
     const artifactsCreated: string[] = [];
 
@@ -63,6 +64,14 @@ ${auditResult.summary}
     artifactsCreated.push(verificationPath);
     await recordArtifact(scanId, "verification_md", verificationPath);
 
+    // 3. Full Report (LLM Friendly JSON)
+    if (reportData) {
+        const reportPath = `skillguard/${scanId}/report.json`;
+        await uploadString(reportPath, JSON.stringify(reportData, null, 2), "application/json");
+        artifactsCreated.push(reportPath);
+        await recordArtifact(scanId, "report_json", reportPath);
+    }
+
     return artifactsCreated;
 }
 
@@ -80,7 +89,7 @@ async function uploadString(path: string, content: string, contentType: string) 
     }
 }
 
-async function recordArtifact(scanId: string, type: "policy_json" | "verification_md" | "patch_diff", path: string) {
+async function recordArtifact(scanId: string, type: "policy_json" | "verification_md" | "patch_diff" | "report_json", path: string) {
     const { error } = await (supabaseAdmin
         .from("artifacts") as any)
         .insert({

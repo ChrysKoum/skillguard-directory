@@ -2,20 +2,13 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Loader2, CheckCircle, AlertTriangle, Terminal, FileCode, Bug } from "lucide-react";
+import { Search, Loader2, CheckCircle, AlertTriangle, Terminal, FileCode, Bug, Cpu } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface LogEntry {
     text: string;
-    type: "info" | "file" | "error" | "success" | "warning";
-    done: boolean;
-}
-
-interface ScanState {
-    files: string[];
-    currentFileIndex: number;
-    issuesFound: string[];
-    isAnalyzing: boolean;
+    type: "info" | "file" | "error" | "success" | "warning" | "model";
+    isStatic?: boolean;
 }
 
 export default function ScanPage() {
@@ -26,96 +19,65 @@ export default function ScanPage() {
     const [error, setError] = useState("");
     const [skillId, setSkillId] = useState("");
     const [findingsCount, setFindingsCount] = useState(0);
-    const [scanState, setScanState] = useState<ScanState>({
-        files: [],
-        currentFileIndex: 0,
-        issuesFound: [],
-        isAnalyzing: false
-    });
+    const [scanComplete, setScanComplete] = useState(false);
+
+    const [liveStatus, setLiveStatus] = useState("");
+    const [currentFile, setCurrentFile] = useState("");
+    const [filesScanned, setFilesScanned] = useState(0);
+    const [totalFiles, setTotalFiles] = useState(0);
+
     const logsEndRef = useRef<HTMLDivElement>(null);
     const fileAnimationRef = useRef<NodeJS.Timeout | null>(null);
+    const filesListRef = useRef<string[]>([]);
 
-    // Auto-scroll logs
     useEffect(() => {
         logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [logs]);
+    }, [logs, liveStatus]);
 
-    // Cleanup file animation on unmount
     useEffect(() => {
         return () => {
-            if (fileAnimationRef.current) {
-                clearInterval(fileAnimationRef.current);
-            }
+            if (fileAnimationRef.current) clearInterval(fileAnimationRef.current);
         };
     }, []);
 
-    const addLog = (text: string, type: LogEntry["type"] = "info", done = false) => {
-        setLogs(prev => {
-            // Mark previous logs as done (grey) unless they're errors
-            const updated = prev.map(l => ({
-                ...l,
-                done: l.type === "error" ? l.done : true
-            }));
-            return [...updated, { text, type, done }];
-        });
+    const addLog = (text: string, type: LogEntry["type"] = "info", isStatic = false) => {
+        console.log(`[UI LOG] ${text}`);
+        setLogs(prev => [...prev, { text, type, isStatic }]);
     };
 
-    // Parse files from the "Deep Audit" message
     const parseFilesFromMessage = (msg: string): string[] => {
-        // Example: "Deep Audit: Asking Gemini 3 Pro to review app/.env.example, skills/README.md, app/README.md + 57 others"
         const match = msg.match(/review\s+(.+?)(?:\s+\(|$)/);
         if (!match) return [];
-
         const filesStr = match[1];
         const files: string[] = [];
-
-        // Extract named files
         const namedFiles = filesStr.match(/([^\s,]+\.[a-zA-Z0-9]+)/g);
-        if (namedFiles) {
-            files.push(...namedFiles.slice(0, 10)); // First 10 files
-        }
-
-        // Check for "+ X others"
+        if (namedFiles) files.push(...namedFiles);
         const othersMatch = filesStr.match(/\+\s*(\d+)\s*others/);
         if (othersMatch) {
             const count = parseInt(othersMatch[1], 10);
-            // Add placeholder files for animation
-            for (let i = 0; i < Math.min(count, 20); i++) {
-                files.push(`additional-file-${i + 1}.ts`);
-            }
+            for (let i = 0; i < count; i++) files.push(`file-${i + 1}`);
         }
-
         return files;
     };
 
-    // Start animated file scanning
     const startFileAnimation = (files: string[]) => {
-        if (files.length === 0) return;
-
-        setScanState(prev => ({
-            ...prev,
-            files,
-            currentFileIndex: 0,
-            isAnalyzing: true
-        }));
-
+        filesListRef.current = files;
+        setTotalFiles(files.length);
+        setFilesScanned(0);
         let index = 0;
         fileAnimationRef.current = setInterval(() => {
+            setCurrentFile(files[index]);
+            setFilesScanned(index + 1);
             index = (index + 1) % files.length;
-            setScanState(prev => ({
-                ...prev,
-                currentFileIndex: index
-            }));
-        }, 400); // Cycle every 400ms
+        }, 300);
     };
 
-    // Stop file animation
     const stopFileAnimation = () => {
         if (fileAnimationRef.current) {
             clearInterval(fileAnimationRef.current);
             fileAnimationRef.current = null;
         }
-        setScanState(prev => ({ ...prev, isAnalyzing: false }));
+        setCurrentFile("");
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -130,12 +92,14 @@ export default function ScanPage() {
         setLogs([]);
         setFindingsCount(0);
         setSkillId("");
-        setScanState({ files: [], currentFileIndex: 0, issuesFound: [], isAnalyzing: false });
+        setScanComplete(false);
+        setLiveStatus("");
+        setCurrentFile("");
 
         addLog("⚡ Initializing security scan...", "info");
+        addLog("📡 Connecting to GitHub...", "info");
 
         try {
-            addLog("📡 Connecting to GitHub...", "info");
             const res = await fetch("/api/scan", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -143,6 +107,8 @@ export default function ScanPage() {
             });
 
             const data = await res.json();
+            console.log("[UI] Scan started:", data);
+
             if (!res.ok) throw new Error(data.error || "Scan failed");
 
             const { scanId, skillId: sid, cached } = data;
@@ -150,139 +116,244 @@ export default function ScanPage() {
 
             if (cached) {
                 addLog("✅ Cached result found!", "success", true);
-                addLog("🔗 Redirecting to report...", "info", true);
-                await new Promise(r => setTimeout(r, 1000));
-                router.push(`/skill/${sid}`);
+                setScanComplete(true);
+                setIsScanning(false);
                 return;
             }
 
             addLog("📥 Downloading repository...", "info");
+            setLiveStatus("Downloading repository...");
 
             const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
             let attempts = 0;
             let lastMsg = "";
             let lastIssueCount = 0;
             let filesInitialized = false;
+            let totalRepoFiles = 0;  // Track total files in repo
+            let criticalFiles = 0;   // Track critical files for deep audit
+            let tokenCount = "?";    // Track token count
+            let shownSourceInfo = false;  // Track if we've shown source info
 
-            while (attempts < 100) {
+            while (attempts < 200) {
                 await delay(1500);
                 attempts++;
 
-                const pollRes = await fetch(`/api/scan/${scanId}`);
-                if (!pollRes.ok) continue;
+                try {
+                    const pollRes = await fetch(`/api/scan/${scanId}`);
+                    if (!pollRes.ok) {
+                        console.log(`[UI] Poll ${attempts} failed: ${pollRes.status}`);
+                        continue;
+                    }
 
-                const scan = await pollRes.json();
-                if (!scan) continue;
+                    const scan = await pollRes.json();
+                    if (!scan) continue;
 
-                // Check status FIRST
-                if (scan.status === "done" || scan.status === "done_with_warnings") {
-                    stopFileAnimation();
-                    const findings = scan.deep_json?.findings?.length || 0;
-                    setFindingsCount(findings);
+                    const msg = scan.stage_status?.msg || scan.progress_msg || "";
+                    console.log(`[UI] Poll #${attempts}: status=${scan.status}, msg="${msg}"`);
 
-                    // Show final issues
-                    if (scan.deep_json?.findings) {
-                        for (const finding of scan.deep_json.findings) {
-                            const existingIssue = scanState.issuesFound.find(i => i === finding.title);
-                            if (!existingIssue) {
-                                addLog(`🐛 ${finding.severity.toUpperCase()}: ${finding.title}`, "error", true);
+                    // DONE!
+                    if (scan.status === "done" || scan.status === "done_with_warnings") {
+                        stopFileAnimation();
+                        setLiveStatus("");
+
+                        const findings = scan.deep_json?.findings || [];
+                        setFindingsCount(findings.length);
+
+                        for (const finding of findings) {
+                            addLog(`🔴 ${(finding.severity || "MEDIUM").toUpperCase()}: ${finding.title}`, "error", true);
+                        }
+
+                        addLog(`✅ Analysis complete: ${findings.length} issue${findings.length !== 1 ? 's' : ''} found`, "success", true);
+                        setScanComplete(true);
+                        setIsScanning(false);
+                        return;
+                    }
+
+                    if (scan.status === "error") {
+                        stopFileAnimation();
+                        throw new Error(scan.error_text || "Scan failed");
+                    }
+
+                    // Process message
+                    if (msg && msg !== lastMsg) {
+                        lastMsg = msg;
+                        console.log(`[UI] Processing new message: "${msg}"`);
+                        console.log(`[UI] filesInitialized=${filesInitialized}`);
+
+                        // Extract file counts from stage_status (stored by backend)
+                        const stageStatus = scan.stage_status || {};
+                        if (stageStatus.totalRepoFiles && !totalRepoFiles) {
+                            totalRepoFiles = stageStatus.totalRepoFiles;
+                            console.log(`[UI] Got totalRepoFiles from stage_status: ${totalRepoFiles}`);
+                        }
+                        if (stageStatus.criticalFiles) {
+                            criticalFiles = stageStatus.criticalFiles;
+                            console.log(`[UI] Got criticalFiles from stage_status: ${criticalFiles}`);
+                        }
+                        if (stageStatus.tokenCount) {
+                            tokenCount = stageStatus.tokenCount;
+                            console.log(`[UI] Got tokenCount from stage_status: ${tokenCount}`);
+                        }
+
+                        // Show source info once (official source + subdirectory)
+                        if (!shownSourceInfo && stageStatus.owner) {
+                            shownSourceInfo = true;
+
+                            // Show official source if detected
+                            if (stageStatus.officialSource) {
+                                addLog(`🏢 Official ${stageStatus.officialSource} source`, "success");
+                            }
+
+                            // Show subdirectory if scanning a specific path
+                            if (stageStatus.subpath) {
+                                addLog(`📁 Subdirectory: /${stageStatus.subpath}`, "info");
                             }
                         }
-                    }
 
-                    addLog(`📊 Analysis complete: ${findings} issue${findings !== 1 ? 's' : ''} found`, "success", true);
-                    addLog("🔗 Opening report...", "info", true);
-
-                    await delay(1500);
-                    router.push(`/skill/${sid}`);
-                    return;
-                }
-
-                if (scan.status === "error") {
-                    stopFileAnimation();
-                    throw new Error(scan.error_text || "Scan failed");
-                }
-
-                // Process progress messages
-                const msg = scan.stage_status?.msg || scan.progress_msg;
-                if (msg && msg !== lastMsg) {
-                    lastMsg = msg;
-
-                    // Check for file list message
-                    if (msg.includes("Deep Audit:") && msg.includes("review") && !filesInitialized) {
-                        filesInitialized = true;
-                        const files = parseFilesFromMessage(msg);
-                        if (files.length > 0) {
-                            addLog(`🔍 Starting deep analysis of ${files.length} files...`, "info");
-                            startFileAnimation(files);
+                        // Fetching repository
+                        if (msg.includes("Fetching repository")) {
+                            console.log("[UI] -> Matched: Fetching repository");
+                            setLiveStatus("📥 Downloading repository...");
                         }
-                    }
-                    // Check for issue count updates
-                    else if (msg.includes("issue(s) so far")) {
-                        const countMatch = msg.match(/(\d+)\s*issue/);
-                        if (countMatch) {
-                            const newCount = parseInt(countMatch[1], 10);
-                            if (newCount > lastIssueCount) {
-                                // New issue found!
-                                for (let i = lastIssueCount; i < newCount; i++) {
-                                    addLog(`🔴 Security issue #${i + 1} detected!`, "error");
-                                    setScanState(prev => ({
-                                        ...prev,
-                                        issuesFound: [...prev.issuesFound, `Issue ${i + 1}`]
-                                    }));
+                        // Analyzing X files - store the total
+                        else if (msg.match(/Analyzing \d+ files/)) {
+                            console.log("[UI] -> Matched: Analyzing X files");
+                            const match = msg.match(/(\d+)\s*files/);
+                            if (match) {
+                                totalRepoFiles = parseInt(match[1]);
+                                console.log(`[UI] -> Total repo files: ${totalRepoFiles}`);
+                                addLog(`📂 Found ${totalRepoFiles} files in repository`, "info");
+                                setLiveStatus(`📂 Analyzing ${totalRepoFiles} files...`);
+                            }
+                        }
+                        // Processing for deep audit
+                        else if (msg.includes("Processing") && msg.includes("critical")) {
+                            console.log("[UI] -> Matched: Processing critical");
+                            addLog("🔍 Selecting critical files for deep audit...", "info");
+                            setLiveStatus("🔍 Selecting critical files...");
+                        }
+                        // Deep Audit asking Gemini (with file list) - USE stage_status values, fallback to parsing
+                        else if (msg.includes("Deep Audit:") && msg.includes("review") && !filesInitialized) {
+                            console.log("[UI] -> Matched: Deep Audit with review (has files)");
+                            filesInitialized = true;
+
+                            // PREFER stage_status values (already extracted above), fallback to parsing from message
+                            if (!tokenCount || tokenCount === "?") {
+                                const tokenMatch = msg.match(/\(([\d.]+)k?\s*tokens\)/);
+                                tokenCount = tokenMatch ? tokenMatch[1] : "?";
+                            }
+                            console.log(`[UI] -> Using tokenCount: ${tokenCount}k`);
+
+                            if (!criticalFiles) {
+                                const othersMatch = msg.match(/\+ (\d+) others/);
+                                const namedFilesMatch = msg.match(/review\s+([^(]+?)(?:\s+\+|\s+\()/);
+                                const namedCount = namedFilesMatch ? namedFilesMatch[1].split(",").map((s: string) => s.trim()).filter((s: string) => s.length > 0).length : 0;
+                                criticalFiles = namedCount + (othersMatch ? parseInt(othersMatch[1]) : 0);
+                            }
+                            console.log(`[UI] -> Using criticalFiles: ${criticalFiles}`);
+
+                            // Use values for display
+                            const displayTotal = totalRepoFiles || criticalFiles;
+                            addLog(`🤖 Using Gemini 3 Pro to analyze ${criticalFiles}/${displayTotal} critical files (${tokenCount}k tokens)`, "model", true);
+                            setLiveStatus(`🤖 Gemini analyzing ${criticalFiles} files...`);
+
+                            // Parse files for animation
+                            const files = parseFilesFromMessage(msg);
+                            if (files.length > 0) startFileAnimation(files);
+                        }
+                        // Analyzing with model (fallback if we missed the "review" message)
+                        else if (msg.includes("Analyzing with") && !filesInitialized) {
+                            console.log("[UI] -> Matched: Analyzing with (FALLBACK - missed review)");
+                            filesInitialized = true;
+                            const modelMatch = msg.match(/gemini[^\s]*/i);
+                            console.log(`[UI] -> Model match: ${modelMatch?.[0]}, totalRepoFiles=${totalRepoFiles}, criticalFiles=${criticalFiles}, tokenCount=${tokenCount}`);
+
+                            // If we have file counts from stage_status, show them properly
+                            if (totalRepoFiles && !logs.some(l => l.text.includes("Found") && l.text.includes("files"))) {
+                                addLog(`📂 Found ${totalRepoFiles} files in repository`, "info");
+                            }
+
+                            // Show the Gemini message with actual counts from stage_status
+                            const displayCritical = criticalFiles || totalRepoFiles || "?";
+                            const displayTotal = totalRepoFiles || criticalFiles || "?";
+                            const displayTokens = tokenCount || "?";
+                            addLog(`🤖 Using Gemini 3 Pro to analyze ${displayCritical}/${displayTotal} critical files (${displayTokens}k tokens)`, "model", true);
+                            setLiveStatus(`🤖 ${modelMatch ? modelMatch[0] : "Gemini"} analyzing...`);
+
+                            // We can still animate with placeholder files
+                            const placeholderFiles = Array.from({ length: criticalFiles || 20 }, (_, i) => `file-${i + 1}.py`);
+                            startFileAnimation(placeholderFiles);
+                        }
+                        // Already initialized, just update status
+                        else if (msg.includes("Analyzing with") && filesInitialized) {
+                            console.log("[UI] -> Matched: Analyzing with (already initialized)");
+                            const modelMatch = msg.match(/gemini[^\s]*/i);
+                            setLiveStatus(`🤖 ${modelMatch ? modelMatch[0] : "Gemini"} analyzing...`);
+                        }
+                        // Issue found during stream
+                        else if (msg.includes("issue(s) so far")) {
+                            console.log("[UI] -> Matched: Issue count update");
+                            const countMatch = msg.match(/(\d+)\s*issue/);
+                            if (countMatch) {
+                                const newCount = parseInt(countMatch[1], 10);
+                                console.log(`[UI] -> newCount=${newCount}, lastIssueCount=${lastIssueCount}`);
+                                if (newCount > lastIssueCount) {
+                                    for (let i = lastIssueCount; i < newCount; i++) {
+                                        addLog(`🔴 Issue #${i + 1} detected!`, "error", true);
+                                    }
+                                    lastIssueCount = newCount;
+                                    setFindingsCount(newCount);
                                 }
-                                lastIssueCount = newCount;
                             }
                         }
+                        // Final potential issues
+                        else if (msg.includes("Found") && msg.includes("potential")) {
+                            console.log("[UI] -> Matched: Found potential issues");
+                            setLiveStatus("✅ Finalizing results...");
+                        }
+                        // Analysis Complete
+                        else if (msg === "Analysis Complete.") {
+                            console.log("[UI] -> Matched: Analysis Complete");
+                            setLiveStatus("✅ Done! Preparing report...");
+                        }
+                        // Fallback - show message as-is
+                        else {
+                            console.log("[UI] -> FALLBACK: No specific match");
+                            setLiveStatus(`🔄 ${msg}`);
+                        }
                     }
-                    // Other progress messages
-                    else if (!msg.includes("Analyzing with") && !msg.includes("Analysis Complete")) {
-                        addLog(`🔬 ${msg}`, "info");
-                    }
+                } catch (pollError) {
+                    console.error(`[UI] Poll error:`, pollError);
                 }
             }
 
-            throw new Error("Timeout - check back later");
+            throw new Error("Timeout - the scan is taking longer than expected");
 
         } catch (err) {
             stopFileAnimation();
             setError(err instanceof Error ? err.message : "Unknown error");
             addLog(`❌ Error: ${err instanceof Error ? err.message : "Unknown"}`, "error", true);
-        } finally {
             setIsScanning(false);
-            stopFileAnimation();
         }
     };
 
     const getLogColor = (log: LogEntry) => {
-        if (log.done && log.type !== "error") return "text-slate-500";
         switch (log.type) {
             case "error": return "text-red-400";
             case "success": return "text-green-400";
             case "warning": return "text-yellow-400";
-            case "file": return "text-cyan-400";
-            default: return "text-green-400";
-        }
-    };
-
-    const getLogIcon = (log: LogEntry) => {
-        switch (log.type) {
-            case "error": return "🔴";
-            case "success": return "✅";
-            case "file": return "📄";
-            default: return "›";
+            case "model": return "text-purple-400";
+            default: return "text-slate-400";
         }
     };
 
     return (
         <div className="min-h-screen bg-slate-950 flex flex-col items-center pt-16 px-4">
-            {/* Header */}
             <div className="text-center space-y-2 mb-8">
                 <h1 className="text-3xl font-bold text-white">Scan AI Agent</h1>
                 <p className="text-slate-400">Enter a GitHub repository URL to analyze</p>
             </div>
 
-            {/* Input */}
             <form onSubmit={handleSubmit} className="w-full max-w-xl mb-8">
                 <div className="relative">
                     <input
@@ -298,98 +369,89 @@ export default function ScanPage() {
                         disabled={isScanning || !input}
                         className="absolute right-2 top-1/2 -translate-y-1/2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
                     >
-                        {isScanning ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                            <Search className="w-4 h-4" />
-                        )}
+                        {isScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                         {isScanning ? "Scanning..." : "Scan"}
                     </button>
                 </div>
             </form>
 
-            {/* Terminal Output */}
             <AnimatePresence>
-                {(logs.length > 0 || scanState.isAnalyzing) && (
+                {(logs.length > 0 || liveStatus) && (
                     <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         className="w-full max-w-xl"
                     >
                         <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                            {/* Terminal Header */}
                             <div className="flex items-center gap-2 px-4 py-2 bg-slate-800/50 border-b border-slate-700">
                                 <Terminal className="w-4 h-4 text-slate-400" />
                                 <span className="text-xs text-slate-400 font-medium">SECURITY AUDIT</span>
-                                {scanState.issuesFound.length > 0 && (
+                                {findingsCount > 0 && (
                                     <span className="ml-2 px-2 py-0.5 bg-red-500/20 text-red-400 text-xs rounded-full flex items-center gap-1">
-                                        <Bug className="w-3 h-3" />
-                                        {scanState.issuesFound.length} issues
+                                        <Bug className="w-3 h-3" /> {findingsCount} issues
                                     </span>
                                 )}
                                 {isScanning && <Loader2 className="w-3 h-3 text-indigo-400 animate-spin ml-auto" />}
-                                {!isScanning && !error && findingsCount > 0 && (
-                                    <CheckCircle className="w-3 h-3 text-green-400 ml-auto" />
-                                )}
+                                {scanComplete && <CheckCircle className="w-3 h-3 text-green-400 ml-auto" />}
                                 {error && <AlertTriangle className="w-3 h-3 text-red-400 ml-auto" />}
                             </div>
 
-                            {/* Terminal Body */}
                             <div className="p-4 font-mono text-sm h-80 overflow-y-auto">
                                 {logs.map((log, i) => (
                                     <motion.div
                                         key={i}
-                                        initial={{ opacity: 0, x: -10 }}
+                                        initial={{ opacity: 0, x: -5 }}
                                         animate={{ opacity: 1, x: 0 }}
                                         className={`py-0.5 ${getLogColor(log)}`}
                                     >
-                                        <span className="text-slate-600 mr-2">{getLogIcon(log)}</span>
+                                        <span className="text-slate-600 mr-2">›</span>
                                         {log.text}
                                     </motion.div>
                                 ))}
 
-                                {/* Animated File Scanning Display */}
-                                {scanState.isAnalyzing && scanState.files.length > 0 && (
-                                    <motion.div
-                                        key="file-scan"
-                                        className="py-1 text-cyan-400 flex items-center gap-2"
-                                        animate={{ opacity: [0.5, 1, 0.5] }}
-                                        transition={{ duration: 0.8, repeat: Infinity }}
-                                    >
-                                        <FileCode className="w-4 h-4" />
-                                        <span>Scanning: </span>
+                                {liveStatus && !currentFile && (
+                                    <div className="py-0.5 text-cyan-400 animate-pulse">
+                                        <span className="text-slate-600 mr-2">›</span>
+                                        {liveStatus}
+                                    </div>
+                                )}
+
+                                {currentFile && (
+                                    <motion.div className="py-0.5 text-cyan-400 flex items-center gap-2">
+                                        <span className="text-slate-600">›</span>
+                                        <FileCode className="w-3 h-3 animate-pulse" />
+                                        <span>Scanning:</span>
                                         <motion.span
-                                            key={scanState.currentFileIndex}
-                                            initial={{ opacity: 0, y: -5 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            className="text-white font-medium"
+                                            key={currentFile}
+                                            initial={{ opacity: 0 }}
+                                            animate={{ opacity: 1 }}
+                                            className="text-white"
                                         >
-                                            {scanState.files[scanState.currentFileIndex]}
+                                            {currentFile}
                                         </motion.span>
-                                        <span className="text-slate-500 text-xs ml-2">
-                                            ({scanState.currentFileIndex + 1}/{scanState.files.length})
-                                        </span>
+                                        <span className="text-slate-500 text-xs">({filesScanned}/{totalFiles})</span>
                                     </motion.div>
                                 )}
 
-                                {isScanning && !scanState.isAnalyzing && (
+                                {isScanning && !currentFile && !liveStatus && (
                                     <div className="text-green-400 animate-pulse py-0.5">
                                         <span className="text-slate-600 mr-2">›</span>_
                                     </div>
                                 )}
+
                                 <div ref={logsEndRef} />
                             </div>
                         </div>
 
-                        {/* View Report Button */}
-                        {!isScanning && skillId && !error && (
+                        {scanComplete && skillId && !error && (
                             <motion.button
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
                                 onClick={() => router.push(`/skill/${skillId}`)}
-                                className="w-full mt-4 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-medium transition-colors"
+                                className="w-full mt-4 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
                             >
-                                View Full Report →
+                                <CheckCircle className="w-4 h-4" />
+                                View Full Report ({findingsCount} issue{findingsCount !== 1 ? 's' : ''})
                             </motion.button>
                         )}
                     </motion.div>

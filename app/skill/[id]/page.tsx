@@ -1,19 +1,31 @@
-import { supabase } from "@/lib/supabase";
-import { RiskBadge } from "@/components/ui/RiskBadge";
-import { CertifiedBadge } from "@/components/ui/CertifiedBadge";
-import { CapabilityChip } from "@/components/ui/CapabilityChip";
-import { RescanButton } from "@/components/RescanButton";
-import { Shield, Download, AlertTriangle, CheckCircle, FileCode, Activity } from "lucide-react";
-import Link from "next/link";
+import { createClient } from "@supabase/supabase-js";
+import { supabaseAdmin } from "@/lib/supabase";
 import { notFound } from "next/navigation";
+import { SecondaryBadges } from "@/components/ui/SecondaryBadges";
+import { TierBadge } from "@/components/ui/TierBadge";
+import { getTierFromScore } from "@/lib/safetyScore";
+import { CertifiedBadge } from "@/components/ui/CertifiedBadge";
+import { RescanButton } from "@/components/RescanButton";
+import { CapabilityChip } from "@/components/ui/CapabilityChip";
+import { RiskBadge } from "@/components/ui/RiskBadge";
+import { ExtremeDangerBadge } from "@/components/ui/ExtremeDangerBadge";
+import { ArtifactViewer } from "@/components/ArtifactViewer";
+import { AlertTriangle, Shield, FileCode } from "lucide-react";
 
 export const revalidate = 0;
 
 async function getSkillData(id: string) {
-    const { data: skill } = await (supabase.from("skills") as any).select("*").eq("id", id).single();
-    if (!skill) return null;
+    // 1. Get Skill
+    const { data: skill, error: skillError } = await (supabaseAdmin
+        .from("skills") as any)
+        .select("*")
+        .eq("id", id)
+        .single();
 
-    const { data: scan } = await (supabase
+    if (skillError || !skill) return null;
+
+    // 2. Get Latest Scan
+    const { data: scan, error: scanError } = await (supabaseAdmin
         .from("scans") as any)
         .select("*")
         .eq("skill_id", id)
@@ -21,39 +33,46 @@ async function getSkillData(id: string) {
         .limit(1)
         .single();
 
-    const { data: artifacts } = await (supabase
-        .from("artifacts") as any)
-        .select("*")
-        .eq("scan_id", scan?.id);
+    // 3. Get Artifacts with Signed URLs
+    let artifacts: any[] = [];
+    if (scan) {
+        const { data: arts } = await (supabaseAdmin
+            .from("artifacts") as any)
+            .select("*")
+            .eq("scan_id", scan.id);
 
-    // Generate signed URLs
-    const artifactsWithUrls = await Promise.all((artifacts || []).map(async (art: any) => {
-        const { data } = await supabase.storage.from("skillguard").createSignedUrl(art.storage_path, 3600);
-        return { ...art, download_url: data?.signedUrl };
-    }));
+        // Generate signed URLs for each artifact
+        artifacts = await Promise.all((arts || []).map(async (art: any) => {
+            const { data } = await supabaseAdmin.storage
+                .from("skillguard")
+                .createSignedUrl(art.storage_path, 3600); // Valid for 1 hour
 
-    return { skill, scan, artifacts: artifactsWithUrls };
+            return {
+                ...art,
+                download_url: data?.signedUrl
+            };
+        }));
+    }
+
+    return {
+        skill,
+        scan: scan || {},
+        staticRes: scan?.static_json || {},
+        deepRes: scan?.deep_json || {},
+        safetyScore: scan?.deep_json?.safety_score || 0,
+        artifacts
+    };
 }
 
-export default async function SkillReport({ params }: { params: Promise<{ id: string }> }) {
+export default async function SkillDetailsPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
     const data = await getSkillData(id);
 
-    if (!data) return notFound();
-
-    const { skill, scan, artifacts } = data;
-    const staticRes = scan?.static_json as any;
-    const deepRes = scan?.deep_json as any;
-
-    if (!scan || scan.status !== "done") {
-        return (
-            <div className="min-h-screen flex items-center justify-center flex-col gap-4 text-slate-400">
-                <Activity className="w-10 h-10 animate-pulse text-indigo-500" />
-                <p>Analysis in progress or failed...</p>
-                <Link href="/scan" className="text-indigo-400 hover:underline">Try again</Link>
-            </div>
-        );
+    if (!data) {
+        return notFound();
     }
+
+    const { skill, scan, staticRes, deepRes, safetyScore, artifacts } = data;
 
     return (
         <div className="min-h-screen py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
@@ -61,9 +80,32 @@ export default async function SkillReport({ params }: { params: Promise<{ id: st
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12 border-b border-slate-800 pb-8">
                 <div>
                     <div className="flex items-center gap-3 mb-2">
-                        <h1 className="text-3xl font-bold text-white">{skill.name}</h1>
-                        {scan.risk_level === 'low' ? <CertifiedBadge /> : <RiskBadge level={scan.risk_level} className="text-sm px-3 py-1" />}
+                        <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold text-slate-500 bg-slate-900 border border-slate-700 px-2 py-0.5 rounded">
+                            {skill.category || 'Uncategorized'}
+                        </span>
                     </div>
+                    <div className="flex items-center gap-3 mb-2 flex-wrap">
+                        <h1 className="text-3xl font-bold text-white">{skill.name}</h1>
+                        <TierBadge tier={getTierFromScore(safetyScore)} className="text-sm" />
+                        {['platinum', 'diamond', 'obsidian'].includes(getTierFromScore(safetyScore)) && (
+                            <div className="scale-90 origin-left">
+                                <CertifiedBadge />
+                            </div>
+                        )}
+                        {staticRes.has_injection_attempt && (
+                            <ExtremeDangerBadge evidence={staticRes.injection_evidence || []} />
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-4 mb-4">
+                        {(() => {
+                            if (!skill.slug) return null;
+                            const parts = skill.slug.split('/');
+                            if (parts.length < 2) return null;
+                            return <SecondaryBadges owner={parts[0]} repo={parts[1]} />;
+                        })()}
+                    </div>
+
                     <div className="flex items-center gap-4">
                         <a href={skill.source_url} target="_blank" className="text-slate-400 hover:text-indigo-400 font-mono text-sm">
                             {skill.source_url}
@@ -92,17 +134,7 @@ export default async function SkillReport({ params }: { params: Promise<{ id: st
                         </div>
                     )}
 
-                    {artifacts.map((art) => (
-                        <a
-                            key={art.id}
-                            href={art.download_url}
-                            target="_blank"
-                            className="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-indigo-500 text-slate-300 px-4 py-2 rounded-lg text-sm transition-all"
-                        >
-                            <Download className="w-4 h-4" />
-                            {art.type === 'policy_json' ? 'Policy.json' : 'Verification Plan'}
-                        </a>
-                    ))}
+                    <ArtifactViewer artifacts={artifacts} />
                 </div>
             </div>
 
@@ -113,13 +145,19 @@ export default async function SkillReport({ params }: { params: Promise<{ id: st
                     <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6">
                         <h3 className="text-sm font-medium text-slate-500 uppercase tracking-wider mb-4">Safety Score</h3>
                         <div className="flex items-end gap-2">
-                            <span className="text-5xl font-bold text-white">{100 - (staticRes?.static_score || 0)}</span>
+                            <span className={`text-5xl font-bold ${safetyScore >= 80 ? 'text-green-400' :
+                                safetyScore >= 50 ? 'text-yellow-400' :
+                                    safetyScore >= 20 ? 'text-orange-400' : 'text-red-400'
+                                }`}>{safetyScore}</span>
                             <span className="text-slate-500 mb-1">/ 100</span>
                         </div>
                         <div className="w-full bg-slate-800 h-2 rounded-full mt-4 overflow-hidden">
                             <div
-                                className="h-full bg-gradient-to-r from-red-500 to-green-500"
-                                style={{ width: `${100 - (staticRes?.static_score || 0)}%` }}
+                                className={`h-full ${safetyScore >= 80 ? 'bg-green-500' :
+                                    safetyScore >= 50 ? 'bg-yellow-500' :
+                                        safetyScore >= 20 ? 'bg-orange-500' : 'bg-red-500'
+                                    }`}
+                                style={{ width: `${safetyScore}%` }}
                             />
                         </div>
                     </div>

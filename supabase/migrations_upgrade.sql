@@ -21,3 +21,11 @@ CHECK (status IN ('queued', 'running', 'done', 'done_with_warnings', 'error'));
 COMMENT ON COLUMN public.scans.stage_status IS 'Tracks progress of static vs deep analysis e.g. {"static": "done", "deep": "rate_limited"}';
 COMMENT ON COLUMN public.scans.deep_model_used IS 'The actual model version used (e.g. gemini-3-flash-preview) after fallback logic';
 COMMENT ON COLUMN public.scans.warnings IS 'List of non-fatal warnings e.g. ["Deep audit rate limited", "File truncated"]';
+
+-- 4. Update artifacts type constraint to include 'report_json'
+ALTER TABLE public.artifacts
+DROP CONSTRAINT IF EXISTS artifacts_type_check;
+
+ALTER TABLE public.artifacts
+ADD CONSTRAINT artifacts_type_check
+CHECK (type IN ('policy_json', 'verification_md', 'patch_diff', 'report_json'));

@@ -11,12 +11,15 @@ async function getRecentScans() {
     .select(`
       id,
       risk_level,
+      verified_badge,
       created_at,
       status,
       skills (
         id,
         name,
-        slug
+        slug,
+        category,
+        source_url
       )
     `)
     .eq("status", "done")

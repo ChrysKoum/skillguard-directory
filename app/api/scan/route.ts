@@ -6,6 +6,7 @@ import { performStaticScan } from "@/lib/staticScanner";
 import { performDeepAudit } from "@/lib/geminiAudit";
 import { generateAndStoreArtifacts } from "@/lib/artifacts";
 import { buildSmartScanPack } from "@/lib/scanPack";
+import { calculateSafetyScore, getTierFromScore, getTierDescription } from "@/lib/safetyScore";
 
 // Set max duration for Vercel (if Pro)
 export const maxDuration = 60;
@@ -21,9 +22,31 @@ export async function POST(req: NextRequest) {
         const { url, forceRescan } = scanSchema.parse(body);
 
         // 1. Resolve Skill (Slug)
-        const { owner, repo } = parseGitHubInfo(url);
-        const slug = `${owner}/${repo}`.toLowerCase();
-        const normalizedUrl = `https://github.com/${owner}/${repo}`;
+        const { owner, repo, subpath } = parseGitHubInfo(url);
+        // If subpath exists, append it to slug: owner/repo/path/to/skill
+        const slug = subpath
+            ? `${owner}/${repo}/${subpath}`.toLowerCase()
+            : `${owner}/${repo}`.toLowerCase();
+
+        const normalizedUrl = subpath
+            ? `https://github.com/${owner}/${repo}/tree/main/${subpath}`
+            : `https://github.com/${owner}/${repo}`;
+
+        // ... rest of the code ...
+
+        function parseGitHubInfo(url: string) {
+            const u = new URL(url);
+            const parts = u.pathname.split("/").filter(Boolean);
+            // Handle /tree/main/path format
+            if (parts.length >= 4 && parts[2] === "tree") {
+                return {
+                    owner: parts[0],
+                    repo: parts[1],
+                    subpath: parts.slice(4).join("/")
+                };
+            }
+            return { owner: parts[0], repo: parts[1], subpath: "" };
+        }
 
         // 2. Check/Create Skill
         let skillId: string;
@@ -36,10 +59,15 @@ export async function POST(req: NextRequest) {
         if (existingSkill) {
             skillId = existingSkill.id;
         } else {
+            // Use subdirectory name if scanning a subpath, otherwise use repo name
+            const skillName = subpath
+                ? subpath.split('/').pop() || repo  // Use last part of path
+                : repo;
+
             const { data: newSkill, error: createError } = await (supabaseAdmin
                 .from("skills") as any)
                 .insert({
-                    name: repo,
+                    name: skillName,
                     slug: slug,
                     source_url: normalizedUrl,
                     source_type: "github",
@@ -72,14 +100,33 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        // Detect if official source
+        const OFFICIAL_SOURCES: Record<string, string> = {
+            "anthropics": "Anthropic",
+            "openai": "OpenAI",
+            "microsoft": "Microsoft",
+            "google": "Google",
+            "vercel": "Vercel",
+            "cursor-ai": "Cursor AI"
+        };
+        const officialSource = OFFICIAL_SOURCES[owner.toLowerCase()] || null;
+
         // 4. Create Scan Record (Running)
         const { data: scan, error: scanError } = await (supabaseAdmin
             .from("scans") as any)
             .insert({
                 skill_id: skillId,
                 status: "running",
-                risk_level: null, // set later
-                scan_pack_json: {}, // populate if debugging needed, or skip to save space
+                risk_level: null,
+                progress_msg: "Initializing scan...",
+                stage_status: {
+                    static: "pending",
+                    deep: "pending",
+                    msg: "Initializing scan...",
+                    owner,
+                    subpath: subpath || null,
+                    officialSource
+                },
             })
             .select("id")
             .single();
@@ -116,40 +163,66 @@ async function runAnalysisPipeline(scanId: string, url: string) {
         console.log(`[Pipeline] Starting for ${scanId}...`);
 
         // Update DB: Ingesting
-        await updateScanStatus(scanId, "ingesting", { static: "pending", deep: "pending" }, "Fetching repository...");
+        await updateScanStatus(scanId, "running", { static: "pending", deep: "pending" }, "Fetching repository...");
 
         // A. Ingest
         const pack = await fetchRepoZip(url);
 
-        // Update DB: Static Scan
-        await updateScanStatus(scanId, "analysis", { static: "scanning", deep: "pending" }, `Analyzing ${pack.files.length} files...`);
+        // Update DB: Static Scan - include totalRepoFiles
+        await updateScanStatus(scanId, "running", {
+            static: "scanning",
+            deep: "pending",
+            totalRepoFiles: pack.files.length
+        }, `Analyzing ${pack.files.length} files...`);
 
         // B. Static
         const staticRes = performStaticScan(pack);
 
         // C. Smart Deep Audit (Token Budgeting)
-        await updateScanStatus(scanId, "analysis", { static: "done", deep: "pending" }, `Processing ${pack.files.length} files to select the most critical for deep audit...`);
+        await updateScanStatus(scanId, "running", {
+            static: "done",
+            deep: "pending",
+            totalRepoFiles: pack.files.length
+        }, `Processing ${pack.files.length} files to select the most critical for deep audit...`);
         console.log(`[Pipeline] Building Smart Pack for ${scanId}...`);
         const smartPack = buildSmartScanPack(pack, staticRes);
         console.log(`[Pipeline] Smart Pack: ${smartPack.files.length} files (${smartPack.total_tokens} tokens). warnings: ${smartPack.warnings.length}`);
 
-        // Update DB: Deep Audit Start
+        // Update DB: Deep Audit Start - include ALL file info for frontend
         const keyFiles = smartPack.files.slice(0, 3).map(f => f.path).join(", ");
         const remaining = smartPack.files.length - 3;
+        const tokenCountK = (smartPack.total_tokens / 1000).toFixed(1);
         await updateScanStatus(
             scanId,
-            "analysis",
-            { static: "done", deep: "scanning" },
-            `Deep Audit: Asking Gemini 3 Pro to review ${keyFiles} ${remaining > 0 ? `+ ${remaining} others` : ""} (${(smartPack.total_tokens / 1000).toFixed(1)}k tokens)...`
+            "running",
+            {
+                static: "done",
+                deep: "scanning",
+                totalRepoFiles: pack.files.length,
+                criticalFiles: smartPack.files.length,
+                tokenCount: tokenCountK
+            },
+            `Deep Audit: Asking Gemini 3 Pro to review ${keyFiles} ${remaining > 0 ? `+ ${remaining} others` : ""} (${tokenCountK}k tokens)...`
         );
 
         // D. Deep Audit (Gemini 3 Pro -> Flash Fallback) with STREAMING feedback
+        // Store file info for the streaming callback to preserve
+        const fileInfo = {
+            totalRepoFiles: pack.files.length,
+            criticalFiles: smartPack.files.length,
+            tokenCount: tokenCountK
+        };
+
         const deepRes = await performDeepAudit(smartPack, staticRes, "gemini-3-pro-preview", async (progress) => {
-            // Update DB with real-time streaming progress
+            // Update DB with real-time streaming progress - PRESERVE file counts!
             await updateScanStatus(
                 scanId,
-                "analysis",
-                { static: "done", deep: "scanning" },
+                "running",
+                {
+                    static: "done",
+                    deep: "scanning",
+                    ...fileInfo  // Always include file counts
+                },
                 progress.message
             );
         });
@@ -159,44 +232,84 @@ async function runAnalysisPipeline(scanId: string, url: string) {
             deepRes.summary += `\n\n**Note:** ${smartPack.warnings.join(" ")}`;
         }
 
-        // E. Artifacts
-        await generateAndStoreArtifacts(scanId, deepRes);
+        // E. Calculate Safety Score and Tier (Unified System)
+        const safetyScore = calculateSafetyScore(deepRes.findings, staticRes);
+        const badge = getTierFromScore(safetyScore);
+        const tierDescription = getTierDescription(badge);
 
-        // F. Badge Logic - Calculate tier based on findings
-        const criticalCount = deepRes.findings.filter(f => f.severity === "critical").length;
-        const highCount = deepRes.findings.filter(f => f.severity === "high").length;
-        const findingsCount = deepRes.findings.length;
-
-        // Calculate badge tier (Paper → Obsidian)
-        let badge: string = "iron";
-        if (criticalCount >= 2) badge = "paper";
-        else if (criticalCount >= 1) badge = "iron";
-        else if (highCount >= 3) badge = "paper";
-        else if (highCount >= 2) badge = "iron";
-        else if (highCount >= 1) badge = "bronze";
-        else if (deepRes.risk_level === "high" || findingsCount >= 5) badge = "iron";
-        else if (deepRes.risk_level === "medium" || findingsCount >= 3) badge = "bronze";
-        else if (findingsCount === 2) badge = "silver";
-        else if (findingsCount === 1) badge = staticRes.static_score < 30 ? "gold" : "silver";
-        else if (findingsCount === 0) {
-            if (staticRes.static_score < 10) badge = "obsidian";
-            else if (staticRes.static_score < 20) badge = "diamond";
-            else if (staticRes.static_score < 40) badge = "platinum";
-            else badge = "gold";
-        }
+        // F. Artifacts
+        const reportData = {
+            scan_id: scanId,
+            target_url: url,
+            timestamp: new Date().toISOString(),
+            risk_assessment: {
+                level: deepRes.risk_level,
+                score: safetyScore, // Use unified score
+                tier: badge,
+                tier_description: tierDescription
+            },
+            findings: deepRes.findings,
+            verification_plan: deepRes.verification_plan,
+            policy_suggestions: deepRes.policy_suggestions,
+            static_analysis: staticRes,
+            excluded_files: smartPack.warnings, // Contains info about truncated/excluded files
+            token_usage: deepRes.token_usage,
+            model_used: (deepRes as any)._model_used || "unknown"
+        };
+        await generateAndStoreArtifacts(scanId, deepRes, reportData);
 
         // G. Update DB Final
-        await (supabaseAdmin.from("scans") as any).update({
+        // Inject safety_score into deepRes for frontend consumption
+        (deepRes as any).safety_score = safetyScore;
+
+        // G. Update DB Final
+        console.log(`[Pipeline] Final update for ${scanId}: badge=${badge}, safetyScore=${safetyScore}, findings=${deepRes.findings.length}`);
+        const { error: updateError } = await (supabaseAdmin.from("scans") as any).update({
             status: deepRes.findings[0]?.title === "Deep Audit Unavailable" ? "done_with_warnings" : "done",
             risk_level: deepRes.risk_level,
             verified_badge: badge,
             static_json: staticRes as any,
             deep_json: deepRes as any,
             deep_model_used: (deepRes as any)._model_used || "unknown",
-            stage_status: { static: "done", deep: "done", smart_pack: "built" },
+            stage_status: {
+                static: "done",
+                deep: "done",
+                smart_pack: "built",
+                has_injection_attempt: staticRes.has_injection_attempt,
+                injection_evidence: staticRes.injection_evidence
+            },
             warnings: smartPack.warnings,
             progress_msg: "Analysis Complete."
         }).eq("id", scanId);
+
+        if (updateError) {
+            console.error(`[Pipeline] DB UPDATE FAILED for ${scanId}:`, updateError);
+            throw new Error(`DB update failed: ${updateError.message}`);
+        }
+
+        // H. Update skill category if suggested by LLM
+        if (deepRes.suggested_category && deepRes.suggested_category !== "Uncategorized") {
+            // Get the skill_id from the scan
+            const { data: scanData } = await (supabaseAdmin.from("scans") as any)
+                .select("skill_id")
+                .eq("id", scanId)
+                .single();
+
+            if (scanData?.skill_id) {
+                // Only update if category is empty or "Uncategorized"
+                const { data: skill } = await (supabaseAdmin.from("skills") as any)
+                    .select("category")
+                    .eq("id", scanData.skill_id)
+                    .single();
+
+                if (!skill?.category || skill.category === "Uncategorized") {
+                    await (supabaseAdmin.from("skills") as any)
+                        .update({ category: deepRes.suggested_category })
+                        .eq("id", scanData.skill_id);
+                    console.log(`[Pipeline] Updated skill category to: ${deepRes.suggested_category}`);
+                }
+            }
+        }
 
         console.log(`[Pipeline] Success for ${scanId}`);
     } catch (err) {
@@ -212,12 +325,18 @@ async function runAnalysisPipeline(scanId: string, url: string) {
 
 async function updateScanStatus(id: string, status: string, stage: any, msg: string) {
     console.log(`[Pipeline] Status update for ${id}: ${msg}`);
-    // Update both stage_status.msg AND progress_msg for compatibility
-    await (supabaseAdmin.from("scans") as any).update({
+
+    const { error } = await (supabaseAdmin.from("scans") as any).update({
         status,
         stage_status: { ...stage, msg },
         progress_msg: msg
     }).eq("id", id);
+
+    if (error) {
+        console.error(`[Pipeline] STATUS UPDATE FAILED for ${id}:`, error);
+    } else {
+        console.log(`[Pipeline] Status updated successfully for ${id}: ${msg}`);
+    }
 }
 
 function parseGitHubInfo(url: string) {

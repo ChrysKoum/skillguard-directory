@@ -13,6 +13,8 @@ export interface StaticScanResult {
     outbound_domains: string[];
     risk_flags: RiskFlag[];
     static_score: number; // 0-100, where 100 is risky
+    has_injection_attempt: boolean; // Detected prompt injection / misleading comments
+    injection_evidence: string[]; // Evidence of injection attempts
 }
 
 const CAPABILITY_REGEX = {
@@ -44,11 +46,29 @@ const HIGH_RISK_PATTERNS = [
     { pattern: /os\.system\s*\(/i, id: "OS_SYSTEM", severity: "high", msg: "Detected usage of 'os.system()'" }
 ];
 
+// Prompt injection / misleading comment patterns
+// These patterns detect attempts to bypass LLM security analysis
+const INJECTION_PATTERNS = [
+    { pattern: /ignore.*previous.*instructions/i, msg: "Attempts to bypass previous instructions" },
+    { pattern: /forget.*all.*instructions/i, msg: "Attempts to reset LLM context" },
+    { pattern: /this.*(?:is|code.*is).*safe/i, msg: "Misleading safety claim" },
+    { pattern: /do.*not.*report/i, msg: "Attempts to suppress reporting" },
+    { pattern: /skip.*security.*check/i, msg: "Attempts to skip security checks" },
+    { pattern: /trust.*this.*code/i, msg: "Misleading trust claim" },
+    { pattern: /no.*vulnerabilit/i, msg: "False vulnerability claim" },
+    { pattern: /SAFE_CODE_MARKER/i, msg: "Suspicious safety marker" },
+    { pattern: /ignore.*security/i, msg: "Attempts to ignore security" },
+    { pattern: /everything.*is.*fine/i, msg: "Misleading reassurance" },
+    { pattern: /nothing.*malicious/i, msg: "False safety claim" },
+    { pattern: /you.*are.*now/i, msg: "Prompt injection attempt" },
+];
+
 export function performStaticScan(pack: ScanPack): StaticScanResult {
     const capabilities = new Set<string>();
     const sensitivePaths = new Set<string>();
     const outboundDomains = new Set<string>(); // Mock implementation for regex domain extraction
     const riskFlags: RiskFlag[] = [];
+    const injectionEvidence: string[] = [];
     let score = 0;
 
     // 1. Analyze File Content
@@ -70,6 +90,14 @@ export function performStaticScan(pack: ScanPack): StaticScanResult {
                     file: file.path
                 });
                 score += (rule.severity === 'critical' ? 50 : 20);
+            }
+        }
+
+        // Check Injection Patterns (misleading comments/prompt injection)
+        for (const rule of INJECTION_PATTERNS) {
+            if (rule.pattern.test(file.content)) {
+                injectionEvidence.push(`${file.path}: ${rule.msg}`);
+                score += 25; // Significant penalty for injection attempts
             }
         }
 
@@ -98,6 +126,8 @@ export function performStaticScan(pack: ScanPack): StaticScanResult {
         sensitive_paths: Array.from(sensitivePaths),
         outbound_domains: Array.from(outboundDomains).slice(0, 50), // Cap domains
         risk_flags: riskFlags,
-        static_score: score
+        static_score: score,
+        has_injection_attempt: injectionEvidence.length > 0,
+        injection_evidence: injectionEvidence
     };
 }

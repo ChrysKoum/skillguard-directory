@@ -13,8 +13,9 @@ export function Navbar() {
                         </span>
                     </Link>
                     <div className="flex gap-6">
-                        <Link href="/" className="text-slate-400 hover:text-white text-sm font-medium transition-colors">Directory</Link>
+                        <Link href="/" className="text-slate-400 hover:text-white text-sm font-medium transition-colors">Home</Link>
                         <Link href="/scan" className="text-slate-400 hover:text-white text-sm font-medium transition-colors">Scan Agent</Link>
+                        <Link href="/about" className="text-slate-400 hover:text-white text-sm font-medium transition-colors">About</Link>
                     </div>
                 </div>
             </div>
