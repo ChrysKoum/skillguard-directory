@@ -1,3 +1,5 @@
+"use client";
+
 import { TierInfoCard } from "@/components/ui/TierBadge";
 import { CertifiedBadge } from "@/components/ui/CertifiedBadge";
 import { ExtremeDangerBadge } from "@/components/ui/ExtremeDangerBadge";
@@ -112,7 +114,7 @@ export default function AboutPage() {
                         Extreme Danger
                     </h2>
                     <div className="bg-red-950/20 border border-red-900/50 rounded-xl p-8 flex flex-col md:flex-row items-center gap-8">
-                        <div className="transform scale-125">
+                        <div>
                             <ExtremeDangerBadge evidence={[
                                 "Attempts to bypass previous instructions",
                                 "Attempts to suppress reporting",
@@ -143,3 +145,4 @@ export default function AboutPage() {
         </div>
     );
 }
+

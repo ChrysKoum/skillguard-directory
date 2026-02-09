@@ -158,10 +158,10 @@ INSTRUCTIONS:
 4. Output STRICT JSON matching the schema.
 `;
 
-    // Model order: Prioritize Gemini 3 Pro for hackathon (accurate + capable)
+    // Model order: Prioritize Gemini 3 Flash for hackathon (fast + capable). As is the one not getting limitted by Vercel.
     const modelsToTry = [
-        "gemini-3-pro-preview",     // Gemini 3 Pro - accurate and capable
         "gemini-3-flash-preview",     // Gemini 3 Flash - fast and capable
+        "gemini-3-pro-preview",     // Gemini 3 Pro - accurate and capable
     ];
 
     let lastError;
